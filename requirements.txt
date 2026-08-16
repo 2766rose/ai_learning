@@ -1,4 +1,4 @@
-# 基础框架
+# Base framework
 fastapi
 uvicorn[standard]
 celery
@@ -7,19 +7,22 @@ sqlmodel
 python-multipart
 openai
 
-# LangChain 核心
+# LangChain core
 langchain
 langchain-community
 langchain-core
-langchain-openai 
-pypdf 
+langchain-openai
+pypdf
 
-#  向量模型与 PyTorch
+# Vector models / PyTorch
 sentence-transformers
 torch
 chromadb
-langchain-text-splitters 
-unstructured 
-structlog pymupdf
+langchain-text-splitters
+unstructured
+
+# Extra
+structlog
+pymupdf
 langfuse
 python-dotenv

@@ -13,15 +13,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: ????
-        run: pip install -r requirements.txt
-      - name: ??????? GPU/???
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+      - name: Install dependencies
+        run: pip install --retries 3 -r requirements.txt
+      - name: Syntax check (compileall)
         run: python -m compileall -q src/ai_rag
 
   docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: ????
+      - name: Build Docker image
         run: docker build -t ai-learning:${{ github.sha }} .
-      # ?????????????? GHCR/DockerHub???12?????
