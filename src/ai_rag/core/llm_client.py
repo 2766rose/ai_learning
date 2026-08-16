@@ -1,4 +1,4 @@
-﻿# \src\ai_rag\core\llm_client.py
+# src/ai_rag/core/llm_client.py
 from functools import lru_cache
 from openai import AsyncOpenAI
 from ai_rag.core.config import rag_config

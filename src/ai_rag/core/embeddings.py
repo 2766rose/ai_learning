@@ -1,4 +1,4 @@
-﻿# \src\ai_rag\services\embedding.py
+# src/ai_rag/core/embeddings.py
 from __future__ import annotations
 
 import logging

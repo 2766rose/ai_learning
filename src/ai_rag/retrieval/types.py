@@ -1,4 +1,4 @@
-﻿from typing import TypedDict, Dict, Any
+from typing import TypedDict, Dict, Any
 
 class RetrievedDoc(TypedDict):
     id: str

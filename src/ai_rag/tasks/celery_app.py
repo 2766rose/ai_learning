@@ -1,4 +1,4 @@
-﻿# celery_app.py
+# celery_app.py
 import os
 from celery import Celery
 from celery.signals import setup_logging, worker_process_init, worker_ready

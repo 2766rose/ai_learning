@@ -1,4 +1,4 @@
-# \src\ai_rag\rag\splitters/base.py
+# src/ai_rag/rag/splitters/base.py
 from abc import ABC, abstractmethod
 from typing import List
 from ai_rag.rag.models import Document

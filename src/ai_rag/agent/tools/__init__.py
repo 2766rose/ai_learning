@@ -1,4 +1,4 @@
-﻿#src\ai_rag\agent\tools\_init_.py
+# src/ai_rag/agent/tools/__init__.py
 """
 RAG Agent 工具注册中心 (LangGraph & OpenAI Tool Calling 适配版)
 统一管理 Agent 可用工具，并自动生成 OpenAI API 所需的 JSON Schema。
@@ -12,7 +12,6 @@ from zoneinfo import ZoneInfo
 from langchain_core.tools import BaseTool, tool
 
 # 导入具体工具实现
-from ai_rag.agent.tools.doc_upload import doc_upload_tool
 from ai_rag.agent.tools.memory_tool import save_user_memory
 from ai_rag.agent.tools.rag_search import rag_search_tool
 from ai_rag.agent.tools.weather_tool import get_weather
@@ -46,7 +45,6 @@ async def get_current_time(timezone: str = "Asia/Shanghai") -> str:
 # 原始工具列表 (可能包含未正确装饰的普通函数)
 _RAW_TOOLS: List[Any] = [
     rag_search_tool,
-    doc_upload_tool,
     get_current_time,
     save_user_memory,
     get_weather,

@@ -1,4 +1,4 @@
-﻿import io
+import io
 import logging
 from docx import Document
 from ai_rag.parsers.base import BaseParser

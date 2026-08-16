@@ -1,4 +1,4 @@
-# src/ai_rag/tasks/etl_service.py
+# src/ai_rag/services/etl_service.py
 from __future__ import annotations
 
 import asyncio

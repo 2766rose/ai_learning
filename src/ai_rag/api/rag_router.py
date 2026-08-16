@@ -31,15 +31,6 @@ _celery_publish_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix=
 logger.info("🔗 API Broker URL: %s", celery_app.conf.broker_url)
 logger.info("📋 API Registered Tasks: %s", [t for t in celery_app.tasks.keys() if not t.startswith('celery.')])
 
-_redis_client = redis.Redis.from_url(rag_config.CELERY_BROKER_URL)
-
-
-def _get_queue_length(queue_name: str = "celery") -> int:
-    try:
-        return _redis_client.llen(queue_name)
-    except Exception as e:
-        logger.warning("⚠️ 获取队列长度失败: %s", e)
-        return -1
 
 
 # ==================== 1. 文件上传 ====================

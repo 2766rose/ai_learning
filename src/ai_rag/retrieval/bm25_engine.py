@@ -1,4 +1,4 @@
-﻿# src/ai_rag/retrieval/bm25_engine.py
+# src/ai_rag/retrieval/bm25_engine.py
 from __future__ import annotations
 
 import threading

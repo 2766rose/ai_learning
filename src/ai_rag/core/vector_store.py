@@ -1,4 +1,4 @@
-# src\ai_rag\core\vector_store.py
+# src/ai_rag/core/vector_store.py
 from __future__ import annotations
 
 import asyncio

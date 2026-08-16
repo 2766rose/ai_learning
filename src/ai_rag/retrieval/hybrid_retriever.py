@@ -1,4 +1,4 @@
-﻿# hybrid_retriever.py
+# hybrid_retriever.py
 """
 Enterprise-grade Hybrid Retriever with RRF fusion and strict typing.
 """
