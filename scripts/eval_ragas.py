@@ -24,7 +24,7 @@ def ollama_chat(model, q, max_tokens=200):
 
 def rag_chat(q):
     payload = {"messages": [{"role": "user", "content": q}], "user_id": "ragas-eval", "stream": False}
-    req = urllib.request.Request(RAG_API, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(RAG_API, data=json.dumps(payload).encode("utf-8"), headers=_api_headers())
     resp = urllib.request.urlopen(req, timeout=180)
     d = json.loads(resp.read().decode("utf-8"))
     return d.get("ai_answer", "").strip(), d.get("retrieved_knowledge", "") or ""
@@ -97,6 +97,22 @@ def avg_correctness(records):
         s += judge_correctness(r["question"], r["answer"], r["reference"])
     return s / len(records)
 from ragas.metrics import answer_correctness, faithfulness
+def _api_headers():
+    import os
+    _k = ""
+    try:
+        for _l in open(r"D:\ai_learning\.env", "r", encoding="utf-8"):
+            _l = _l.strip()
+            if _l.startswith("RAG_API_KEY="):
+                _k = _l.split("=", 1)[1].strip()
+                break
+    except Exception:
+        pass
+    _h = {"Content-Type": "application/json"}
+    if _k:
+        _h["X-API-Key"] = _k
+    return _h
+
 
 llm = ChatOpenAI(model=JUDGE_MODEL, base_url=OLLAMA_V1, api_key="ollama", temperature=0)
 
