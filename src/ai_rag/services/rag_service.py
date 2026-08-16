@@ -23,8 +23,8 @@ def _similarity(h: Dict[str, Any]) -> float:
 # 下调到 0.35 并让 RRF 排序兜底（排后面的低分结果自然被 top_k 截断）。
 MIN_SIMILARITY = 0.35
 # 2026-08-14：控制工具返回体量（3 块 × 300 字），避免检索结果过大导致上下文裁剪塌缩/循环
-MAX_CHUNK_CHARS = 300
-MAX_FORMATTED_CHUNKS = 3
+MAX_CHUNK_CHARS = 450
+MAX_FORMATTED_CHUNKS = 2
 NO_RESULT_MSG = "No relevant information found in knowledge base."
 
 
