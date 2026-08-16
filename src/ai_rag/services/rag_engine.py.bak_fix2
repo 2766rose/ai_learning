@@ -51,7 +51,7 @@ class RAGEngine:
             return RetrievalResult(documents=docs, distances=dists, formatted_context=formatted)
         except Exception as e:
             logger.exception("RAGEngine.retrieve failed for query=%s", query[:80])
-            return RetrievalResult(documents=[], distances=[], formatted_context="")
+            return RetrievalResult(documents=[], distances=[], formatted_context=f"检索异常: {e}")
 
     async def generate(self, query: str, context: str) -> str:
         """基于上下文的 LLM 生成（无 Tool Call，单次调用）"""

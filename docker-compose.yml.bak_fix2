@@ -12,24 +12,17 @@ services:
       - "8000:8000"
     env_file:
       - .env
-    environment:
-      - RAG_OPENAI_BASE_URL=http://host.docker.internal:11434/v1
-      - RAG_EMBED_MODEL_PATH=/models/text2vec-base-chinese
     depends_on:
       - redis
     # 第12周修正：挂载真实的 chroma 数据目录（data/chroma_db）
     volumes:
       - ./data/chroma_db:/app/data/chroma_db
-      - D:/models:/models:ro
 
   celery-worker:
     build: .
     container_name: ai_learning-celery-worker-1
     env_file:
       - .env
-    environment:
-      - RAG_OPENAI_BASE_URL=http://host.docker.internal:11434/v1
-      - RAG_EMBED_MODEL_PATH=/models/text2vec-base-chinese
     depends_on:
       - redis
       - fastapi
@@ -37,4 +30,3 @@ services:
     command: celery -A ai_rag.tasks.celery_app worker --loglevel=info --concurrency=1 --pool=solo
     volumes:
       - ./data/chroma_db:/app/data/chroma_db
-      - D:/models:/models:ro

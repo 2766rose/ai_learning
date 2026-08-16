@@ -125,11 +125,4 @@ async def ingest_document(file_path: str, metadata: Optional[Dict[str, Any]] = N
             await vector_store.close()
 
     logger.info("✅ 入库完成: %d chunks -> %s", added, file_path)
-    # cleanup uploaded file after successful ingest
-    try:
-        os.remove(file_path)
-        logger.info("uploaded file cleaned: %s", file_path)
-    except Exception as e:
-        logger.warning("cleanup failed: %s | error=%s", file_path, e)
-
     return added

@@ -15,9 +15,9 @@ celery_app = Celery(
     broker=rag_config.CELERY_BROKER_URL,
     backend=rag_config.CELERY_RESULT_BACKEND,
     include=[
-        "ai_rag.tasks.document_tasks",
+        "src.ai_rag.tasks.document_tasks",
         # 未来第二阶段 Agent 任务可在此扩展
-        # "ai_rag.tasks.agent_tasks", 
+        # "src.ai_rag.tasks.agent_tasks", 
     ],
 )
 
@@ -76,7 +76,7 @@ def on_worker_ready(**kwargs):
     print(f"📋 Registered Tasks: {list(celery_app.tasks.keys())}", flush=True)
     print("=" * 60, flush=True)
     try:
-        from ai_rag.services.etl_service import ingest_document
+        from src.ai_rag.services.etl_service import ingest_document
         print("✅ etl_service 导入成功", flush=True)
     except Exception as e:
         print(f"❌ etl_service 导入失败: {e}", flush=True)

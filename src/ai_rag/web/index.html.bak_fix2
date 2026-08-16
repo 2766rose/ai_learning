@@ -197,17 +197,6 @@
 <script>
 const userId = localStorage.getItem('web_user_id') || ('web-' + Math.random().toString(36).slice(2, 10));
 localStorage.setItem('web_user_id', userId);
-const API_KEY = localStorage.getItem('rag_api_key') || '';
-function apiHeaders(withJson) {
-  const h = withJson ? { 'Content-Type': 'application/json' } : {};
-  if (API_KEY) h['X-API-Key'] = API_KEY;
-  return h;
-}
-function handle401(resp) {
-  const k = prompt('Enter API key if required:');
-  if (k) { localStorage.setItem('rag_api_key', k); location.reload(); }
-}
-
 
 const $ = id => document.getElementById(id);
 const chatBox = $('chatBox'), input = $('input'), upList = $('upList');
@@ -226,7 +215,7 @@ fetch('/health').then(r => r.json()).then(() => {
 }).catch(() => {
   $('healthDot').className = 'dot off'; $('healthText').textContent = '后端未连接';
 });
-fetch('/api/rag/agent/tools', { headers: apiHeaders(true) }).then(r => { if (r.status === 401) { handle401(r); return null; } return r.json(); }).then(j => {
+fetch('/api/rag/agent/tools').then(r => r.json()).then(j => {
   if (j && j.total) $('toolsText').textContent = '可用工具 ' + j.total + ' 个';
 }).catch(() => { $('toolsText').textContent = '工具信息不可用'; });
 
@@ -255,11 +244,10 @@ async function sendMessage() {
   try {
     const resp = await fetch('/api/rag/chat/stream', {
       method: 'POST',
-      headers: apiHeaders(true),
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages: [{ role: 'user', content: text }], user_id: userId, stream: true })
     });
     if (!resp.ok) {
-      if (resp.status === 401) { handle401(resp); return; }
       let msg = '请求失败（' + resp.status + '）';
       try { const j = await resp.json(); if (j.detail) msg = j.detail; } catch (e) {}
       bubble.textContent = '⚠️ ' + msg;
@@ -328,7 +316,7 @@ async function uploadFiles(files) {
     const fd = new FormData();
     fd.append('file', f);
     try {
-      const resp = await fetch('/api/rag/upload', { method: 'POST', headers: apiHeaders(false), body: fd });
+      const resp = await fetch('/api/rag/upload', { method: 'POST', body: fd });
       const j = await resp.json().catch(() => ({}));
       if (!resp.ok) { st.innerHTML = '❌ 上传失败：' + (j.detail || resp.status); st.className = 'st err'; continue; }
       st.innerHTML = '<span class="spin"></span>' + (j.message || '后台处理中…');
@@ -339,7 +327,7 @@ async function uploadFiles(files) {
 async function pollStatus(taskId, el, tries) {
   tries = tries || 0;
   try {
-    const resp = await fetch('/api/rag/upload/' + taskId + '/status', { headers: apiHeaders(false) });
+    const resp = await fetch('/api/rag/upload/' + taskId + '/status');
     const j = await resp.json();
     if (j.status === 'SUCCESS') { el.innerHTML = '✅ 入库完成'; el.className = 'st ok'; }
     else if (j.status === 'FAILURE') { el.innerHTML = '❌ 入库失败：' + (j.error || '未知错误'); el.className = 'st err'; }
