@@ -59,7 +59,7 @@ SYSTEM_PROMPT = f"""你是企业知识库助手，严格遵守以下规则：
 
 【用户长期记忆】
 ⚠️ 仅当下方出现「{MEMORY_INJECTION_MARKER}」标记时，才表示存在有效记忆。
-- 有记忆时：自然融入回答，不要提及"根据您的记忆"等元描述。
+- 有记忆时：自然融入回答，不要提及"根据您的记忆"等元描述；仅在用户主动提及或询问相关个人事实（如名字、偏好）时才使用记忆，日常问候或无关话题时不要主动提及用户名字。
 - 无记忆时（未出现上述标记）：如用户询问个人偏好/禁忌/身份等信息，必须如实告知"目前没有找到您的相关记录"，严禁编造、猜测或使用示例数据。
 
 【回答规范】
@@ -359,6 +359,18 @@ async def agent_run(
         logger.exception("⚠️ [Memory] 检索失败，降级使用基础 Prompt | user=%s | session=%s", user_id, session_id)
 
     # 2. 构建初始消息
+    # 预检索：不依赖模型工具调用，先把知识库结果注入上下文
+    try:
+        _ctx = await _execute_tool("knowledge_search", {"query": user_message})
+        if _ctx and _ctx.strip() and "检索失败" not in _ctx:
+            if _ctx == "No relevant information found in knowledge base.":
+                system_content += "\n\n【知识库检索结果】知识库中未找到与用户问题相关的信息。"
+            else:
+                system_content += ("\n\n【知识库检索结果】以下内容可能包含与用户问题相关的信息：\n" + _ctx + "\n（若上述内容与问题无关，请忽略；若相关，请严格依据其回答并标注来源编号）")
+            logger.info("[RAG] 知识库预检索注入 | len=%d | user=%s", len(_ctx), user_id)
+    except Exception as e:
+        logger.warning("[RAG] 知识库预检索失败 | user=%s | error=%s", user_id, e)
+
     messages = _build_initial_messages(system_content, user_message)
 
     # 3. 路由至流式或非流式处理

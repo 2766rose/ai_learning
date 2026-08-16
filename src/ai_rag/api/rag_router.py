@@ -180,7 +180,8 @@ async def chat(request: ChatRequest, raw_request: Request):
             trace_id=str(uuid.uuid4()),
             retrieved_knowledge=retrieved_knowledge,
         )
-        semantic_cache.put(_q_emb, ai_answer)
+        if ai_answer and len(ai_answer) >= 10 and "未找到" not in ai_answer and "没有找到" not in ai_answer:
+            semantic_cache.put(_q_emb, ai_answer)
         safe_update_output(obs, output=ai_answer)
         return resp
     finally:
@@ -247,7 +248,8 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
                 error_payload = json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False)
                 yield f"data: {error_payload}\n\n"
 
-            semantic_cache.put(_q_emb, full_answer)
+            if full_answer and len(full_answer) >= 10 and "未找到" not in full_answer and "没有找到" not in full_answer:
+                semantic_cache.put(_q_emb, full_answer)
             safe_update_output(obs, output=full_answer)
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
