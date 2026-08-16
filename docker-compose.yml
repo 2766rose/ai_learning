@@ -1,9 +1,9 @@
-﻿services:
+services:
   redis:
     image: redis:7-alpine
     container_name: ai_learning-redis-1
-    expose:
-      - "6379"
+    ports:
+      - "6379:6379"
 
   fastapi:
     build: .
@@ -23,6 +23,7 @@
     volumes:
       - ./data/chroma_db:/app/data/chroma_db
       - D:/models:/models:ro
+      - ./uploads:/app/uploads
 
   celery-worker:
     build: .
@@ -42,3 +43,4 @@
     volumes:
       - ./data/chroma_db:/app/data/chroma_db
       - D:/models:/models:ro
+      - ./uploads:/app/uploads

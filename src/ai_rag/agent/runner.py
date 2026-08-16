@@ -51,7 +51,7 @@ SYSTEM_PROMPT = f"""你是企业知识库助手，严格遵守以下规则：
 2. 天气/气温/降雨/风力等 → get_weather
 3. 企业内部知识/文档/业务规范/产品手册 → knowledge_search
 4. 文件上传/文档管理操作 → doc_upload
-5. 用户主动告知个人偏好、事实、身份等信息 → save_user_memory
+5. 当用户自我介绍、告知姓名/偏好/职业/身份等个人稳定信息时，必须调用 save_user_memory 保存 → save_user_memory
 6. 以上均不适用 → 直接基于对话上下文回答，不调用任何工具
 
 【组合调用】
@@ -192,7 +192,7 @@ def _build_assistant_tool_message(
 # -----------------------------------------------------------------------------
 # 内部辅助函数
 # -----------------------------------------------------------------------------
-async def _execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
+async def _execute_tool(tool_name: str, arguments: Dict[str, Any], user_id: Optional[str] = None) -> str:
     """动态分发并执行工具调用"""
     tool_func = TOOL_REGISTRY_MAP.get(tool_name)
 
@@ -201,7 +201,8 @@ async def _execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
         return json.dumps({"error": f"Unknown tool: {tool_name}"}, ensure_ascii=False)
 
     try:
-        result = await tool_func.ainvoke(arguments)
+        _tool_cfg = {"configurable": {"user_id": user_id}} if user_id else None
+        result = await tool_func.ainvoke(arguments, config=_tool_cfg)
         result_str = str(result)
         logger.info(
             "[Tool] 执行成功 | tool=%s | args=%s | result_len=%d",
@@ -231,6 +232,7 @@ def _build_initial_messages(system_content: str, user_message: str) -> List[Dict
 async def _stream_tool_loop(
     messages: List[Dict[str, Any]],
     session_id: str,
+    user_id: Optional[str] = None,
     max_iterations: int = MAX_AGENT_ITERATIONS,
 ) -> AsyncGenerator[str, None]:
     """
@@ -296,7 +298,7 @@ async def _stream_tool_loop(
                     "[Stream] 工具调用 | session=%s | iter=%d | tool=%s",
                     session_id, iteration, tc["name"],
                 )
-                result = await _execute_tool(tc["name"], tc["arguments"])
+                result = await _execute_tool(tc["name"], tc["arguments"], user_id=user_id)
                 messages.append({
                     "role": "tool",
                     "content": result,
@@ -362,7 +364,7 @@ async def agent_run(
 
     # 3. 路由至流式或非流式处理
     if stream:
-        return _stream_tool_loop(messages, session_id)
+        return _stream_tool_loop(messages, session_id, user_id=user_id)
 
     # ====== 非流式模式 ======
     retrieved_chunks: List[str] = []
@@ -420,7 +422,7 @@ async def agent_run(
                 "[Agent] 工具调用 | session=%s | iter=%d | tool=%s",
                 session_id, iteration, tc["name"],
             )
-            result = await _execute_tool(tc["name"], tc["arguments"])
+            result = await _execute_tool(tc["name"], tc["arguments"], user_id=user_id)
 
             if tc["name"] == "knowledge_search" and result not in retrieved_chunks:
                 retrieved_chunks.append(result)
