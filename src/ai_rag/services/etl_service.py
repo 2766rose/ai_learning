@@ -70,7 +70,7 @@ async def ingest_document(file_path: str, metadata: Optional[Dict[str, Any]] = N
     # 切分器模式：recursive(默认) | naive | semantic（环境变量 RAG_SPLITTER 切换）
     # 2026-08-14：默认改用 recursive，避免朴素 500 字滑动窗口把多个主题揉进一个块，导致检索不准
     splitter_mode = os.environ.get("RAG_SPLITTER", "recursive").strip().lower()
-    chunk_size = 500
+    chunk_size = 300
     chunk_overlap = 50
     if splitter_mode == "semantic":
         from ai_rag.rag.splitters.semantic_chunker import SemanticChunker
