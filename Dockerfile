@@ -10,6 +10,7 @@ FROM python:3.12-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends libmagic1 poppler-utils && rm -rf /var/lib/apt/lists/*
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PATH=/root/.local/bin:$PATH
+ENV PYTHONPATH=/app/src
 COPY --from=builder /root/.local /root/.local
 COPY . .
 EXPOSE 8000
