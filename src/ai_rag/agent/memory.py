@@ -9,6 +9,7 @@ import chromadb
 from openai import AsyncOpenAI
 
 from ai_rag.core.config import rag_config
+from ai_rag.core.embeddings import embedding_service
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +119,7 @@ async def retrieve_memories(
     user_id: str,
     query: str,
     top_k: int = 3,
-    distance_threshold: float = 0.7  # ✅ 优化3：cosine distance 阈值，越大越不相关
+    distance_threshold: float = 0.5  # ✅ 优化3：cosine distance 阈值，越大越不相关
 ) -> List[str]:
     """根据当前 query 检索用户的长期记忆，自动过滤低相关性结果"""
     collection = _get_memory_collection()
@@ -128,7 +129,7 @@ async def retrieve_memories(
             return []
 
         results = collection.query(
-            query_texts=[query],
+            query_embeddings=[embedding_service.embed_query(query)],
             n_results=top_k,
             where={"user_id": user_id},
             include=["documents", "distances"]  # ✅ 同时返回距离用于过滤
@@ -164,8 +165,9 @@ async def save_memories_with_dedup(user_id: str, facts: List[str]) -> None:
     for fact in facts:
         try:
             # 检索最相似的已有记忆
+            _fact_emb = embedding_service.embed_query(fact)
             existing = collection.query(
-                query_texts=[fact],
+                query_embeddings=[_fact_emb],
                 n_results=1,
                 where={"user_id": user_id},
                 include=["distances", "documents"]
@@ -189,6 +191,7 @@ async def save_memories_with_dedup(user_id: str, facts: List[str]) -> None:
                 collection.update(
                     ids=[old_id],
                     documents=[fact],
+                    embeddings=[_fact_emb],
                     metadatas=[{"user_id": user_id, "type": "fact", "updated_at": time.time()}]
                 )
                 logger.info("🔄 [Memory] 更新记忆: '%s' → '%s'", old_doc[:50], fact[:50])
@@ -197,6 +200,7 @@ async def save_memories_with_dedup(user_id: str, facts: List[str]) -> None:
                 collection.add(
                     ids=[str(uuid.uuid4())],
                     documents=[fact],
+                    embeddings=[_fact_emb],
                     metadatas=[{"user_id": user_id, "type": "fact", "created_at": time.time()}]
                 )
                 logger.info("💾 [Memory] 新增记忆: %s", fact)
