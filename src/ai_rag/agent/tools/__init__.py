@@ -15,6 +15,7 @@ from langchain_core.tools import BaseTool, tool
 from ai_rag.agent.tools.doc_upload import doc_upload_tool
 from ai_rag.agent.tools.memory_tool import save_user_memory
 from ai_rag.agent.tools.rag_search import rag_search_tool
+from ai_rag.agent.tools.weather_tool import get_weather
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ _RAW_TOOLS: List[Any] = [
     doc_upload_tool,
     get_current_time,
     save_user_memory,
+    get_weather,
 ]
 
 # ✅ 类型守卫：仅保留合法的 LangChain BaseTool 实例

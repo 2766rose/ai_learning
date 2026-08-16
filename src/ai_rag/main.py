@@ -1,6 +1,8 @@
-﻿# src/ai_rag/main.py
+# src/ai_rag/main.py
 import logging
+from pathlib import Path
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from ai_rag.core.lifespan import lifespan         
 from ai_rag.core.logging_config import configure_logging 
@@ -24,3 +26,8 @@ logger = logging.getLogger(__name__)
 async def health_check():
     logger.info("health_check_passed")
     return {"status": "ok"}
+
+# ===== 网页界面（放在最后挂载，不影响 /api 路由）=====
+WEB_DIR = Path(__file__).resolve().parent / "web"
+WEB_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")

@@ -9,7 +9,7 @@ import logging
 import re
 from typing import Dict, List, Optional, Tuple
 
-from config import rag_config
+from ai_rag.core.config import rag_config
 
 logger = logging.getLogger(__name__)
 

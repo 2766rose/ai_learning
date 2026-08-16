@@ -28,6 +28,9 @@ class RAGConfig(BaseSettings):
     CHROMA_PERSIST_DIR: str = str(PROJECT_ROOT / "data" / "chroma_db")
     CHROMA_COLLECTION_NAME: str = "knowledge_base"
     CHROMA_VECTOR_SPACE: str = "cosine"
+    # Chunking (moved from root config.py)
+    CHUNK_SIZE: int = 500
+    CHUNK_OVERLAP: int = 50
     TOP_K: int = 5
 
     # ✅ 新增：长期记忆专用 ChromaDB 配置（与 RAG 知识库物理隔离）
