@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 class ExcelParser:
     """解析 .xlsx / .xls 文件，将所有 sheet 内容转为纯文本"""
 
-    SUPPORTED_EXTENSIONS = {".xlsx", ".xls"}
+    SUPPORTED_EXTENSIONS = {".xlsx"}
 
     def parse_file(self, file_path: str) -> str:
         try:

@@ -45,12 +45,7 @@ async def lifespan(app: FastAPI):
     # ✅ 3. 预热 RAGEngine（可选，推荐）
     # 确保 OpenAI client 等内部组件在启动阶段完成初始化，
     # 而不是等到第一个用户请求时才创建。
-    try:
-        from ai_rag.services.rag_engine import RAGEngine
-        RAGEngine()
-        logger.info("✅ RAGEngine initialized")
-    except Exception as e:
-        logger.warning("⚠️ RAGEngine pre-init skipped: %s", e)
+    # RAGEngine pre-init removed (original never awaited the coroutine)
 
     yield
 

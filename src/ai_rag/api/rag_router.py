@@ -54,7 +54,12 @@ async def upload_file(file: UploadFile = File(...)):
         os.makedirs(upload_dir, exist_ok=True)
         file_path = os.path.abspath(os.path.join(upload_dir, f"{task_id}{ext}"))
 
+        if ext not in rag_config.ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail="Unsupported file type: " + str(ext))
+
         content = await file.read()
+        if len(content) > rag_config.MAX_FILE_SIZE:
+            raise HTTPException(status_code=413, detail="File too large")
         if not content:
             raise HTTPException(status_code=400, detail="上传的文件内容为空")
 

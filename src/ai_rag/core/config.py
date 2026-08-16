@@ -48,7 +48,7 @@ class RAGConfig(BaseSettings):
     # 文件上传配置
     UPLOAD_DIR: Path = PROJECT_ROOT / "uploads"
     MAX_FILE_SIZE: int = 20 * 1024 * 1024
-    ALLOWED_EXTENSIONS: set[str] = {".pdf", ".txt", ".md", ".docx"}
+    ALLOWED_EXTENSIONS: set[str] = {".pdf", ".txt", ".md", ".docx", ".xlsx"}
 
     # Local Ollama 配置
     LOCAL_MODEL: str = "qwen3:8b"

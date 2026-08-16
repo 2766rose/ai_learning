@@ -10,6 +10,8 @@ from starlette.responses import Response
 logger = logging.getLogger(__name__)
 
 API_KEY = os.getenv("RAG_API_KEY", "")
+if not API_KEY:
+    logger.warning("RAG_API_KEY not set: API is unauthenticated - do not expose to public network")
 
 
 class SensitiveWordFilter:

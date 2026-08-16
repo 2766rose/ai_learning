@@ -5,7 +5,8 @@ from contextlib import contextmanager
 
 from dotenv import load_dotenv
 
-load_dotenv(r"D:\ai_learning\.env")
+from ai_rag.core.config import PROJECT_ROOT
+load_dotenv(PROJECT_ROOT / ".env")
 logger = logging.getLogger(__name__)
 
 langfuse = None
