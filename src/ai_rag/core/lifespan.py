@@ -1,0 +1,61 @@
+# src/ai_rag/core/lifespan.py
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+
+from ai_rag.core.config import rag_config
+from ai_rag.core.logging_config import configure_logging
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理：预加载模型和资源，确保请求时零延迟，并在关闭时安全释放"""
+    configure_logging()
+    rag_config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+    logger.info("🚀 Loading RAG resources...")
+
+    # ✅ 1. 预热 Embedding 模型
+    # embedding_service 内部已封装 SentenceTransformer 单例缓存，
+    # 此处调用 embed_query 触发首次模型加载，避免首个请求高延迟。
+    from ai_rag.core.embeddings import embedding_service
+    try:
+        embedding_service.embed_query("warmup")
+        logger.info("✅ Embedding model warmed up successfully")
+    except Exception as e:
+        raise RuntimeError(f"❌ Embedding model warmup failed: {e}") from e
+
+    # ✅ 2. 预热 VectorStore 连接
+    # 通过统一入口初始化 ChromaDB，确保 Settings 全局一致、Collection 名正确。
+    from ai_rag.core.vector_store import get_vector_store
+    try:
+        store = await get_vector_store()
+        logger.info(
+            "✅ ChromaDB ready | collection=%s | path=%s | count=%d",
+            rag_config.CHROMA_COLLECTION_NAME,
+            rag_config.CHROMA_PERSIST_DIR,
+            await store.get_count(),
+        )
+    except Exception as e:
+        raise RuntimeError(f"❌ ChromaDB initialization failed: {e}") from e
+
+    # ✅ 3. 预热 RAGEngine（可选，推荐）
+    # 确保 OpenAI client 等内部组件在启动阶段完成初始化，
+    # 而不是等到第一个用户请求时才创建。
+    try:
+        from ai_rag.services.rag_engine import RAGEngine
+        RAGEngine()
+        logger.info("✅ RAGEngine initialized")
+    except Exception as e:
+        logger.warning("⚠️ RAGEngine pre-init skipped: %s", e)
+
+    yield
+
+    # ✅ 资源释放说明：
+    # - embedding_service: 进程级单例，Python 退出时自动 GC
+    # - VectorStore / ChromaDB PersistentClient: 进程级单例，SQLite WAL 由 OS 回收
+    # - AsyncOpenAI client: httpx.AsyncClient 支持 __del__ 安全关闭
+    logger.info("🛑 RAG resources released (process-level singletons auto-cleaned)")

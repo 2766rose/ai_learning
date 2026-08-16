@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SSE 测试</title>
+</head>
+<body>
+    <h1>打开F12，看控制台输出</h1>
+    <script>
+        async function testSSE() {
+            const response = await fetch('http://127.0.0.1:8000/chat/stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    messages: [
+                        {role: "system", content: "你是一个可爱的ai助手，名字叫小甜甜"},
+                        {role: "user", content: "你好呀，给我讲个笑话"}
+                    ]
+                })
+            });
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) {
+                    console.log("流式传输结束");
+                    break;
+                }
+                
+                const chunk = decoder.decode(value, { stream: true });
+                console.log("收到的原始数据块：", chunk); // 你会看到带 data: 的原始块
+
+                const lines = chunk.split('\n\n');
+                for (let line of lines) {
+                    if (line.startsWith('data: ') && !line.includes('[DONE]')) {
+                        const content = line.replace('data: ', '');
+                        console.log("解析出的内容：", content); // 你会看到丝滑的纯文本
+                    }
+                }
+            }
+        }
+        testSSE();
+    </script>
+</body>
+</html>

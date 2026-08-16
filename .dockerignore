@@ -1,0 +1,14 @@
+.venv
+.venv_312
+__pycache__
+*.pyc
+.git
+.github
+models
+data
+logs
+uploads
+work
+Dockerfile
+docker-compose.yml
+*.md

@@ -1,0 +1,25 @@
+# 基础框架
+fastapi
+uvicorn[standard]
+celery
+redis
+sqlmodel
+python-multipart
+openai
+
+# LangChain 核心
+langchain
+langchain-community
+langchain-core
+langchain-openai 
+pypdf 
+
+#  向量模型与 PyTorch
+sentence-transformers
+torch
+chromadb
+langchain-text-splitters 
+unstructured 
+structlog pymupdf
+langfuse
+python-dotenv

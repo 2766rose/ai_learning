@@ -1,0 +1,32 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: ai_learning-redis-1
+    ports:
+      - "6379:6379"
+
+  fastapi:
+    build: .
+    container_name: ai_learning-fastapi-1
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    # 第12周修正：挂载真实的 chroma 数据目录（data/chroma_db）
+    volumes:
+      - ./data/chroma_db:/app/data/chroma_db
+
+  celery-worker:
+    build: .
+    container_name: ai_learning-celery-worker-1
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - fastapi
+    # 第12周修正：模块名为 ai_rag.tasks.celery_app（原 app.tasks 不存在）
+    command: celery -A ai_rag.tasks.celery_app worker --loglevel=info --concurrency=1 --pool=solo
+    volumes:
+      - ./data/chroma_db:/app/data/chroma_db
