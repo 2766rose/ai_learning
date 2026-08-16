@@ -1,5 +1,5 @@
 # src/ai_rag/core/rate_limiter.py
-"""第11周：用户级限流（滑动窗口，进程内实现）"""
+"""用户级限流（滑动窗口，进程内实现）"""
 import logging
 import threading
 import time

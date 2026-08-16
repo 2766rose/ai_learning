@@ -1,5 +1,5 @@
 # src/ai_rag/core/circuit_breaker.py
-"""第11周：熔断器（LLM 连续失败则快速失败，防止雪崩）"""
+"""熔断器（LLM 连续失败则快速失败，防止雪崩）"""
 import logging
 import threading
 import time

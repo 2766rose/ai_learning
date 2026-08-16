@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""第10周：Langfuse 连通性验证（读 .env 里的密钥，适配 langfuse 4.x）"""
+"""Langfuse 连通性验证（读 .env 里的密钥，适配 langfuse 4.x）"""
 import os, sys
 from dotenv import load_dotenv
 load_dotenv(r"D:\ai_learning\.env")   # 从 .env 读 LANGFUSE_* 密钥

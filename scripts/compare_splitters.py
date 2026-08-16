@@ -1,5 +1,5 @@
 ﻿# scripts/compare_splitters.py
-"""第2周实验：RecursiveCharacterTextSplitter vs SemanticChunker 检索效果对比
+"""RecursiveCharacterTextSplitter vs SemanticChunker 检索效果对比
 用法（在项目虚拟环境中）:
     python scripts/compare_splitters.py
 """
@@ -116,7 +116,7 @@ def main():
 
     # 汇总输出
     lines = []
-    lines.append("# 第2周实验：Recursive vs Semantic 切分器检索对比\n")
+    lines.append("# Recursive vs Semantic 切分器检索对比\n")
     lines.append(f"- 语料：{', '.join(n for n,_ in docs)}")
     lines.append(f"- 参数：chunk_size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP}, top_k={TOP_K}")
     lines.append(f"- 测试问题数：{len(QUESTIONS)}\n")

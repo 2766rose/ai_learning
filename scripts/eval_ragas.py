@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""第9周：RAGAS 评估 —— 微调模型 vs RAG
+"""RAGAS 评估 —— 微调模型 vs RAG
 指标：
 - answer_correctness：回答与参考答案的语义一致度（LLM 评判）
 - faithfulness：回答是否忠于检索上下文（仅 RAG 场景）

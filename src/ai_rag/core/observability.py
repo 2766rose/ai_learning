@@ -1,5 +1,5 @@
 # src/ai_rag/core/observability.py
-"""第10周：Langfuse 可观测性（进程级单例；失败静默降级，绝不影响业务）"""
+"""Langfuse 可观测性（进程级单例；失败静默降级，绝不影响业务）"""
 import logging
 from contextlib import contextmanager
 

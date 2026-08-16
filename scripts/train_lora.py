@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-第8周：qwen2.5-3b QLoRA 指令微调（员工手册制度问答）
+qwen2.5-3b QLoRA 指令微调（员工手册制度问答）
 - 4bit bitsandbytes + LoRA（peft）
 - transformers 原生 Trainer（适配 5.15）
 - 只对 assistant 回答部分计算 loss

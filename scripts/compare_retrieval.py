@@ -1,5 +1,5 @@
 ﻿# scripts/compare_retrieval.py
-"""第3周实验：纯向量 vs 混合(BM25+向量+RRF) vs 混合+BGE-Reranker 检索质量对比
+"""纯向量 vs 混合(BM25+向量+RRF) vs 混合+BGE-Reranker 检索质量对比
 用法：python scripts/compare_retrieval.py
 """
 import os, sys, time, asyncio
@@ -169,7 +169,7 @@ async def main():
         print(f"[{name}] Hit@1={m['hit@1']:.2f} Hit@5={m['hit@5']:.2f} MRR={m['mrr']:.3f} ({time.time()-t0:.0f}s)", flush=True)
 
     lines = []
-    lines.append("# 第3周实验：纯向量 vs 混合检索 vs 混合+Reranker 检索质量对比\n")
+    lines.append("# 纯向量 vs 混合检索 vs 混合+Reranker 检索质量对比\n")
     lines.append(f"- 语料：{', '.join(n for n, _, _ in DOCS)}（chunks={count}）")
     lines.append(f"- 参数：chunk_size={CHUNK_SIZE}, top_k={TOP_K}, RRF k={cfg.rrf_k}, 精排候选={cfg.final_top_k}")
     lines.append(f"- 测试问题数：{len(QUESTIONS)}，命中判定：检索块包含答案关键词\n")

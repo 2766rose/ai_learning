@@ -1,5 +1,5 @@
 # src/ai_rag/retrieval/reranker.py
-"""BGE-Reranker 交叉编码器精排（第3周）
+"""BGE-Reranker 交叉编码器精排
 - 使用 sentence-transformers CrossEncoder 加载 bge-reranker 系列模型
 - 模型默认 BAAI/bge-reranker-base，可用环境变量 RAG_RERANKER_MODEL 指定
 - 下载走 HF，国内可设 HF_ENDPOINT=https://hf-mirror.com

@@ -1,5 +1,5 @@
 # src/ai_rag/core/semantic_cache.py
-"""第11周：语义缓存（按向量相似度拦截重复/相似问题，减少重复推理）"""
+"""语义缓存（按向量相似度拦截重复/相似问题，减少重复推理）"""
 import logging
 import threading
 import time

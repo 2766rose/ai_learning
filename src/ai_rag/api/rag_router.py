@@ -155,13 +155,13 @@ async def chat(request: ChatRequest, raw_request: Request):
 
     session_id = request.session_id or f"sess-{uuid.uuid4().hex[:12]}"
 
-    # 第11周：用户级限流
+    # 用户级限流
     _rl_key = request.user_id or (request.client.host if request.client else "anon")
     _ok, _retry = rate_limiter.allow(_rl_key)
     if not _ok:
         raise HTTPException(status_code=429, detail=f"请求过于频繁，请 {_retry} 秒后重试")
 
-    # 第11周：语义缓存
+    # 语义缓存
     _loop = asyncio.get_running_loop()
     _q_emb = await _loop.run_in_executor(None, embedding_service.embed_query, user_message)
     _cached = semantic_cache.get(_q_emb)
@@ -210,13 +210,13 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
 
     session_id = request.session_id or f"sess-{uuid.uuid4().hex[:8]}"
 
-    # 第11周：用户级限流
+    # 用户级限流
     _rl_key = request.user_id or (request.client.host if request.client else "anon")
     _ok, _retry = rate_limiter.allow(_rl_key)
     if not _ok:
         raise HTTPException(status_code=429, detail=f"请求过于频繁，请 {_retry} 秒后重试")
 
-    # 第11周：语义缓存
+    # 语义缓存
     _loop = asyncio.get_running_loop()
     _q_emb = await _loop.run_in_executor(None, embedding_service.embed_query, user_message)
     _cached = semantic_cache.get(_q_emb)

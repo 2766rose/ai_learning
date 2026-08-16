@@ -1,5 +1,5 @@
 # src/ai_rag/retrieval/retriever.py
-"""混合检索服务：BM25 + 向量检索 + RRF 融合（第3周）
+"""混合检索服务：BM25 + 向量检索 + RRF 融合
 - 懒加载：首次检索时从向量库全量文档预热 BM25 索引
 - 可选接入 BGE-Reranker 精排（见 reranker.py）
 - 环境变量：RAG_RETRIEVAL=hybrid|vector（默认 hybrid）
