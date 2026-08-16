@@ -4,6 +4,7 @@ import logging
 from typing import Set
 
 from fastapi import Request, HTTPException
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 from ai_rag.core.config import rag_config
@@ -50,7 +51,7 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         if API_KEY and request.url.path.startswith("/api/"):
             key = request.headers.get("X-API-Key", "")
             if key != API_KEY:
-                raise HTTPException(status_code=401, detail="Invalid API Key")
+                return JSONResponse(status_code=401, content={"detail": "Invalid API Key"})
 
         # JSON 请求体敏感词过滤
         content_type = request.headers.get("content-type", "")
@@ -69,9 +70,6 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                     request.url.path,
                     hit,
                 )
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Content contains sensitive word: {hit}",
-                )
+                return JSONResponse(status_code=400, content={"detail": f"Content contains sensitive word: {hit}"})
 
         return await call_next(request)
