@@ -3,7 +3,6 @@ import os
 import uuid
 import json
 import logging
-import re
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
@@ -20,6 +19,7 @@ from ai_rag.core.semantic_cache import semantic_cache
 from ai_rag.core.rate_limiter import rate_limiter
 from ai_rag.core.embeddings import embedding_service
 from ai_rag.core.chat_store import add_message
+from ai_rag.core.cache_policy import is_cacheable as _cacheable
 import asyncio
 from ai_rag.core.config import rag_config
 import ai_rag.tasks.document_tasks 
@@ -55,13 +55,7 @@ def _check_conv_owner(conv_id, user_id):
         raise HTTPException(404, "会话不存在")
 
 
-def _cacheable(answer: str) -> bool:
-    """Only cache answers with [n] source citations (grounded), avoiding cache poisoning."""
-    if not answer or len(answer) < 10:
-        return False
-    if "未找到" in answer or "没有找到" in answer:
-        return False
-    return re.search(r"\[\d+\]", answer) is not None
+
 
 _celery_publish_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="celery-pub")
 

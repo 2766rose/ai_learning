@@ -11,7 +11,6 @@ v2（2026-08-14）：
 
 import json
 import logging
-import re
 from typing import AsyncGenerator, Union, List, Dict, Any, Tuple, Optional
 
 import httpx
@@ -22,6 +21,7 @@ from ai_rag.agent.memory import retrieve_memories
 from ai_rag.utils.context_trimmer import trim_messages, ENCODER
 from ai_rag.core.observability import observe, start_observation, end_observation, safe_usage_update, safe_update_output
 from ai_rag.core.circuit_breaker import llm_circuit_breaker
+from ai_rag.core.answer_guard import should_refuse, REFUSAL_MESSAGE
 
 logger = logging.getLogger(__name__)
 
@@ -362,11 +362,9 @@ async def _stream_tool_loop(
         )
         if _buffering:
             _full = "".join(_buffer)
-            if (not _kb_had and not _other_had
-                    and "未找到" not in _full and "没有找到" not in _full
-                    and re.search(r"\d", _full)):
+            if should_refuse(_full, _kb_had, _other_had):
                 logger.warning("[Stream] hallucination guard | session=%s | len=%d", session_id, len(_full))
-                _full = "抱歉，知识库中未找到与您问题相关的信息。"
+                _full = REFUSAL_MESSAGE
             if _full:
                 yield _full
         return
@@ -498,11 +496,9 @@ async def agent_run(
                 session_id, iteration, len(final_content),
             )
             # Deterministic anti-hallucination guard: no KB context + no other tool + digit-bearing claim => refuse
-            if (not kb_had_content and not other_tool_content
-                    and "未找到" not in final_content and "没有找到" not in final_content
-                    and re.search(r"\d", final_content)):
+            if should_refuse(final_content, kb_had_content, other_tool_content):
                 logger.warning("[Agent] hallucination guard | session=%s | len=%d", session_id, len(final_content))
-                final_content = "抱歉，知识库中未找到与您问题相关的信息。"
+                final_content = REFUSAL_MESSAGE
             retrieved_knowledge = "\n\n---\n\n".join(retrieved_chunks) if retrieved_chunks else ""
             return final_content, retrieved_knowledge
 
