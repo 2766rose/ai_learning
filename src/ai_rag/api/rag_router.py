@@ -163,6 +163,13 @@ async def chat(request: ChatRequest, raw_request: Request):
             add_message(request.conversation_id, "assistant", _cached)
         return ChatResponse(ai_answer=_cached, session_id=session_id, trace_id=str(uuid.uuid4()), retrieved_knowledge="")
 
+    _history = None
+    if request.conversation_id:
+        from ai_rag.core.chat_store import list_messages, rename_conversation
+        _history = [{"role": m.role, "content": m.content} for m in list_messages(request.conversation_id)]
+        if not _history:
+            rename_conversation(request.conversation_id, user_message[:20])
+
     obs = start_observation("rag-chat", "agent", input={"question": user_message})
     try:
         result = await agent_run(
@@ -170,6 +177,7 @@ async def chat(request: ChatRequest, raw_request: Request):
             user_message=user_message,
             stream=False,
             user_id=request.user_id or "anonymous",
+            history=_history,
         )
 
         if isinstance(result, tuple) and len(result) == 2:
@@ -228,11 +236,19 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         return StreamingResponse(_cached_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+    _history = None
+    if request.conversation_id:
+        from ai_rag.core.chat_store import list_messages, rename_conversation
+        _history = [{"role": m.role, "content": m.content} for m in list_messages(request.conversation_id)]
+        if not _history:
+            rename_conversation(request.conversation_id, user_message[:20])
+
     generator = await agent_run(
         session_id=session_id,
         user_message=user_message,
         stream=True,
         user_id=request.user_id or "anonymous",
+        history=_history,
     )
 
     async def sse_wrapper():

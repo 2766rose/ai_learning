@@ -41,6 +41,7 @@ def _should_disable_thinking(model_name: str) -> bool:
 
 
 MAX_AGENT_ITERATIONS = 5  # 最大工具调用轮次，防止死循环
+MAX_HISTORY_MESSAGES = 20  # 多轮对话：最多保留最近 20 条历史消息
 MEMORY_INJECTION_MARKER = "📌 以下为检索到的用户记忆"
 
 SYSTEM_PROMPT = f"""你是企业知识库助手，严格遵守以下规则：
@@ -324,6 +325,7 @@ async def agent_run(
     collection: Optional[Any] = None,
     embed_model: Optional[Any] = None,
     stream: bool = False,
+    history: Optional[List[Dict[str, Any]]] = None,
 ) -> Union[Tuple[str, str], AsyncGenerator[str, None]]:
     """
     Agent 核心入口。处理记忆注入、LLM 交互及工具调度。
@@ -371,7 +373,12 @@ async def agent_run(
     except Exception as e:
         logger.warning("[RAG] 知识库预检索失败 | user=%s | error=%s", user_id, e)
 
-    messages = _build_initial_messages(system_content, user_message)
+    messages: List[Dict[str, Any]] = [{"role": "system", "content": system_content}]
+    if history:
+        for _h in history[-MAX_HISTORY_MESSAGES:]:
+            if isinstance(_h, dict) and _h.get("role") in ("user", "assistant", "tool"):
+                messages.append({"role": _h["role"], "content": str(_h.get("content", ""))})
+    messages.append({"role": "user", "content": user_message})
 
     # 3. 路由至流式或非流式处理
     if stream:
