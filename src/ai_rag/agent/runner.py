@@ -250,12 +250,18 @@ async def _stream_tool_loop(
     user_id: Optional[str] = None,
     max_iterations: int = MAX_AGENT_ITERATIONS,
     tool_trace: Optional[List[Dict[str, Any]]] = None,
+    kb_had_content: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
     全流式 Tool Calling 循环（基于 Ollama 原生 /api/chat）。
     - 所有轮次均使用 stream=True，实现真正的逐 Token SSE 推送
     - 支持流式 Tool Calls 到达（Ollama 在生成完成后一次性下发 tool_calls）
     """
+    _kb_had = kb_had_content
+    _other_had = False
+    _buffer: List[str] = []
+    _buffering = not _kb_had  # no KB info yet -> hold output until proven safe
+
     for iteration in range(max_iterations):
         collected_content = ""
         collected_tool_calls: List[Dict[str, Any]] = []
@@ -284,7 +290,10 @@ async def _stream_tool_loop(
                     delta_content = msg.get("content") or ""
                     if delta_content:
                         collected_content += delta_content
-                        yield delta_content
+                        if _buffering:
+                            _buffer.append(delta_content)
+                        else:
+                            yield delta_content
 
                     # 2. 收集工具调用（可能分片到达）
                     tool_calls = msg.get("tool_calls")
@@ -321,6 +330,12 @@ async def _stream_tool_loop(
                     session_id, iteration, tc["name"],
                 )
                 result = await _execute_tool(tc["name"], tc["arguments"], user_id=user_id)
+                if tc["name"] == "knowledge_search":
+                    if result and result != "No relevant information found in knowledge base." and "检索失败" not in result:
+                        _kb_had = True
+                else:
+                    if result and result.strip() and "error" not in result.lower():
+                        _other_had = True
                 _call_id = tc.get("id") or ("call_%d" % i)
                 if tool_trace is not None:
                     tool_trace.append({"role": "tool", "content": result, "tool_call_id": _call_id})
@@ -330,6 +345,13 @@ async def _stream_tool_loop(
                     "tool_call_id": _call_id,
                 })
 
+            if _buffering and (_kb_had or _other_had):
+                _buffering = False
+                _flush = "".join(_buffer)
+                _buffer = []
+                if _flush:
+                    yield _flush
+
             messages = trim_messages(messages, max_tokens=rag_config.LLM_MAX_TOKENS)
             continue
 
@@ -338,6 +360,15 @@ async def _stream_tool_loop(
             "💬 [Stream] 最终回答完成 | session=%s | iter=%d | len=%d",
             session_id, iteration, len(collected_content),
         )
+        if _buffering:
+            _full = "".join(_buffer)
+            if (not _kb_had and not _other_had
+                    and "未找到" not in _full and "没有找到" not in _full
+                    and re.search(r"\d", _full)):
+                logger.warning("[Stream] hallucination guard | session=%s | len=%d", session_id, len(_full))
+                _full = "抱歉，知识库中未找到与您问题相关的信息。"
+            if _full:
+                yield _full
         return
 
     logger.warning("⚠️ [Stream] 达到最大推理轮次 | session=%s", session_id)
@@ -419,7 +450,7 @@ async def agent_run(
 
     # 3. 路由至流式或非流式处理
     if stream:
-        return _stream_tool_loop(messages, session_id, user_id=user_id, tool_trace=tool_trace)
+        return _stream_tool_loop(messages, session_id, user_id=user_id, tool_trace=tool_trace, kb_had_content=kb_had_content)
 
     # ====== 非流式模式 ======
 
