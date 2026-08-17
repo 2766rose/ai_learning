@@ -18,6 +18,7 @@ from ai_rag.core.observability import observe, start_observation, end_observatio
 from ai_rag.core.semantic_cache import semantic_cache
 from ai_rag.core.rate_limiter import rate_limiter
 from ai_rag.core.embeddings import embedding_service
+from ai_rag.core.chat_store import add_message
 import asyncio
 from ai_rag.core.config import rag_config
 import ai_rag.tasks.document_tasks 
@@ -157,6 +158,9 @@ async def chat(request: ChatRequest, raw_request: Request):
     _q_emb = await _loop.run_in_executor(None, embedding_service.embed_query, user_message)
     _cached = semantic_cache.get(_q_emb)
     if _cached is not None:
+        if request.conversation_id:
+            add_message(request.conversation_id, "user", user_message)
+            add_message(request.conversation_id, "assistant", _cached)
         return ChatResponse(ai_answer=_cached, session_id=session_id, trace_id=str(uuid.uuid4()), retrieved_knowledge="")
 
     obs = start_observation("rag-chat", "agent", input={"question": user_message})
@@ -183,6 +187,9 @@ async def chat(request: ChatRequest, raw_request: Request):
         if ai_answer and len(ai_answer) >= 10 and "未找到" not in ai_answer and "没有找到" not in ai_answer:
             semantic_cache.put(_q_emb, ai_answer)
         safe_update_output(obs, output=ai_answer)
+        if request.conversation_id:
+            add_message(request.conversation_id, "user", user_message)
+            add_message(request.conversation_id, "assistant", ai_answer)
         return resp
     finally:
         end_observation(obs)
@@ -213,6 +220,9 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
     _q_emb = await _loop.run_in_executor(None, embedding_service.embed_query, user_message)
     _cached = semantic_cache.get(_q_emb)
     if _cached is not None:
+        if request.conversation_id:
+            add_message(request.conversation_id, "user", user_message)
+            add_message(request.conversation_id, "assistant", _cached)
         async def _cached_stream():
             yield f"data: {json.dumps({'type': 'chunk', 'data': _cached}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
@@ -251,6 +261,9 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
             if full_answer and len(full_answer) >= 10 and "未找到" not in full_answer and "没有找到" not in full_answer:
                 semantic_cache.put(_q_emb, full_answer)
             safe_update_output(obs, output=full_answer)
+            if request.conversation_id:
+                add_message(request.conversation_id, "user", user_message)
+                add_message(request.conversation_id, "assistant", full_answer)
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
     return StreamingResponse(

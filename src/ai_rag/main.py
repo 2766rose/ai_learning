@@ -7,7 +7,8 @@ from fastapi.staticfiles import StaticFiles
 from ai_rag.core.lifespan import lifespan         
 from ai_rag.core.logging_config import configure_logging 
 from ai_rag.middleware.security import SecurityMiddleware       
-from ai_rag.api.rag_router import router as rag_router      
+from ai_rag.api.rag_router import router as rag_router
+from ai_rag.api.conversation_router import router as conv_router      
 
 configure_logging()
 
@@ -19,6 +20,7 @@ app = FastAPI(
 
 app.add_middleware(SecurityMiddleware)
 app.include_router(rag_router, prefix="/api/rag", tags=["RAG"])
+app.include_router(conv_router, prefix="/api/rag", tags=["Conversation"])
 
 logger = logging.getLogger(__name__)
 
