@@ -26,6 +26,33 @@ import ai_rag.tasks.document_tasks
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+
+def _store_tool_trace(conv_id: str, trace) -> None:
+    """Persist assistant tool_calls + tool results into the conversation."""
+    if not conv_id or not trace:
+        return
+    for m in trace:
+        if m.get("role") == "assistant":
+            add_message(
+                conv_id, "assistant", m.get("content") or "",
+                tool_calls=json.dumps(m.get("tool_calls") or [], ensure_ascii=False),
+            )
+        elif m.get("role") == "tool":
+            add_message(
+                conv_id, "tool", m.get("content") or "",
+                tool_call_id=m.get("tool_call_id") or "",
+            )
+
+
+def _check_conv_owner(conv_id, user_id):
+    """Reject writes to a conversation owned by another user."""
+    if not conv_id:
+        return
+    from ai_rag.core.chat_store import get_conversation
+    conv = get_conversation(conv_id)
+    if conv is not None and user_id and conv.user_id != user_id:
+        raise HTTPException(404, "会话不存在")
+
 _celery_publish_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="celery-pub")
 
 # ✅ 启动时打印关键配置
@@ -146,6 +173,8 @@ async def chat(request: ChatRequest, raw_request: Request):
         raise HTTPException(status_code=400, detail="messages 列表中必须包含至少一条 role='user' 的消息")
 
     session_id = request.session_id or f"sess-{uuid.uuid4().hex[:12]}"
+    if request.conversation_id:
+        _check_conv_owner(request.conversation_id, request.user_id)
 
     # 用户级限流
     _rl_key = request.user_id or (request.client.host if request.client else "anon")
@@ -166,18 +195,20 @@ async def chat(request: ChatRequest, raw_request: Request):
     _history = None
     if request.conversation_id:
         from ai_rag.core.chat_store import list_messages, rename_conversation
-        _history = [{"role": m.role, "content": m.content} for m in list_messages(request.conversation_id)]
+        _history = [{"role": m.role, "content": m.content} for m in list_messages(request.conversation_id) if m.role in ("user", "assistant")]
         if not _history:
             rename_conversation(request.conversation_id, user_message[:20])
 
     obs = start_observation("rag-chat", "agent", input={"question": user_message})
     try:
+        _tool_trace: list = []
         result = await agent_run(
             session_id=session_id,
             user_message=user_message,
             stream=False,
             user_id=request.user_id or "anonymous",
             history=_history,
+            tool_trace=_tool_trace,
         )
 
         if isinstance(result, tuple) and len(result) == 2:
@@ -197,6 +228,7 @@ async def chat(request: ChatRequest, raw_request: Request):
         safe_update_output(obs, output=ai_answer)
         if request.conversation_id:
             add_message(request.conversation_id, "user", user_message)
+            _store_tool_trace(request.conversation_id, _tool_trace)
             add_message(request.conversation_id, "assistant", ai_answer)
         return resp
     finally:
@@ -216,6 +248,8 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
         raise HTTPException(status_code=400, detail="messages 列表中必须包含至少一条 role='user' 的消息")
 
     session_id = request.session_id or f"sess-{uuid.uuid4().hex[:8]}"
+    if request.conversation_id:
+        _check_conv_owner(request.conversation_id, request.user_id)
 
     # 用户级限流
     _rl_key = request.user_id or (request.client.host if request.client else "anon")
@@ -239,16 +273,18 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
     _history = None
     if request.conversation_id:
         from ai_rag.core.chat_store import list_messages, rename_conversation
-        _history = [{"role": m.role, "content": m.content} for m in list_messages(request.conversation_id)]
+        _history = [{"role": m.role, "content": m.content} for m in list_messages(request.conversation_id) if m.role in ("user", "assistant")]
         if not _history:
             rename_conversation(request.conversation_id, user_message[:20])
 
+    _tool_trace: list = []
     generator = await agent_run(
         session_id=session_id,
         user_message=user_message,
         stream=True,
         user_id=request.user_id or "anonymous",
         history=_history,
+        tool_trace=_tool_trace,
     )
 
     async def sse_wrapper():
@@ -279,6 +315,7 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
             safe_update_output(obs, output=full_answer)
             if request.conversation_id:
                 add_message(request.conversation_id, "user", user_message)
+                _store_tool_trace(request.conversation_id, _tool_trace)
                 add_message(request.conversation_id, "assistant", full_answer)
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 

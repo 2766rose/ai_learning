@@ -18,7 +18,7 @@ import httpx
 from ai_rag.core.config import rag_config
 from ai_rag.agent.tools import TOOL_REGISTRY_MAP, TOOL_SCHEMAS
 from ai_rag.agent.memory import retrieve_memories
-from ai_rag.utils.context_trimmer import trim_messages
+from ai_rag.utils.context_trimmer import trim_messages, ENCODER
 from ai_rag.core.observability import observe, start_observation, end_observation, safe_usage_update, safe_update_output
 from ai_rag.core.circuit_breaker import llm_circuit_breaker
 
@@ -42,6 +42,19 @@ def _should_disable_thinking(model_name: str) -> bool:
 
 MAX_AGENT_ITERATIONS = 5  # 最大工具调用轮次，防止死循环
 MAX_HISTORY_MESSAGES = 20  # 多轮对话：最多保留最近 20 条历史消息
+HISTORY_TOKEN_BUDGET = 3000  # 多轮对话：历史消息的 token 预算（超出则从最旧开始丢弃）
+
+
+def _trim_history(history, budget=HISTORY_TOKEN_BUDGET):
+    """Keep recent history within token budget (drop oldest first)."""
+    kept, used = [], 0
+    for h in reversed(history):
+        cost = len(ENCODER.encode(str(h.get("content", "")))) + 4
+        if used + cost > budget:
+            break
+        kept.insert(0, h)
+        used += cost
+    return kept
 MEMORY_INJECTION_MARKER = "📌 以下为检索到的用户记忆"
 
 SYSTEM_PROMPT = f"""你是企业知识库助手，严格遵守以下规则：
@@ -234,6 +247,7 @@ async def _stream_tool_loop(
     session_id: str,
     user_id: Optional[str] = None,
     max_iterations: int = MAX_AGENT_ITERATIONS,
+    tool_trace: Optional[List[Dict[str, Any]]] = None,
 ) -> AsyncGenerator[str, None]:
     """
     全流式 Tool Calling 循环（基于 Ollama 原生 /api/chat）。
@@ -292,16 +306,26 @@ async def _stream_tool_loop(
         # 3. 需要执行工具 → 追加 assistant 消息、执行工具、进入下一轮
         if normalized_tool_calls:
             messages.append(_build_assistant_tool_message(collected_content, normalized_tool_calls))
+            if tool_trace is not None:
+                tool_trace.append({
+                    "role": "assistant",
+                    "content": collected_content or "",
+                    "tool_calls": normalized_tool_calls,
+                })
 
-            for tc in normalized_tool_calls:
+            for i, tc in enumerate(normalized_tool_calls):
                 logger.info(
                     "[Stream] 工具调用 | session=%s | iter=%d | tool=%s",
                     session_id, iteration, tc["name"],
                 )
                 result = await _execute_tool(tc["name"], tc["arguments"], user_id=user_id)
+                _call_id = tc.get("id") or ("call_%d" % i)
+                if tool_trace is not None:
+                    tool_trace.append({"role": "tool", "content": result, "tool_call_id": _call_id})
                 messages.append({
                     "role": "tool",
                     "content": result,
+                    "tool_call_id": _call_id,
                 })
 
             messages = trim_messages(messages, max_tokens=rag_config.LLM_MAX_TOKENS)
@@ -326,6 +350,7 @@ async def agent_run(
     embed_model: Optional[Any] = None,
     stream: bool = False,
     history: Optional[List[Dict[str, Any]]] = None,
+    tool_trace: Optional[List[Dict[str, Any]]] = None,
 ) -> Union[Tuple[str, str], AsyncGenerator[str, None]]:
     """
     Agent 核心入口。处理记忆注入、LLM 交互及工具调度。
@@ -375,14 +400,17 @@ async def agent_run(
 
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_content}]
     if history:
-        for _h in history[-MAX_HISTORY_MESSAGES:]:
-            if isinstance(_h, dict) and _h.get("role") in ("user", "assistant", "tool"):
-                messages.append({"role": _h["role"], "content": str(_h.get("content", ""))})
+        _recent = [
+            _h for _h in history[-MAX_HISTORY_MESSAGES:]
+            if isinstance(_h, dict) and _h.get("role") in ("user", "assistant", "tool")
+        ]
+        for _h in _trim_history(_recent):
+            messages.append({"role": _h["role"], "content": str(_h.get("content", ""))})
     messages.append({"role": "user", "content": user_message})
 
     # 3. 路由至流式或非流式处理
     if stream:
-        return _stream_tool_loop(messages, session_id, user_id=user_id)
+        return _stream_tool_loop(messages, session_id, user_id=user_id, tool_trace=tool_trace)
 
     # ====== 非流式模式 ======
     retrieved_chunks: List[str] = []
@@ -434,8 +462,14 @@ async def agent_run(
             return final_content, retrieved_knowledge
 
         messages.append(_build_assistant_tool_message(collected_content, normalized_tool_calls))
+        if tool_trace is not None:
+            tool_trace.append({
+                "role": "assistant",
+                "content": collected_content or "",
+                "tool_calls": normalized_tool_calls,
+            })
 
-        for tc in normalized_tool_calls:
+        for i, tc in enumerate(normalized_tool_calls):
             logger.info(
                 "[Agent] 工具调用 | session=%s | iter=%d | tool=%s",
                 session_id, iteration, tc["name"],
@@ -445,9 +479,14 @@ async def agent_run(
             if tc["name"] == "knowledge_search" and result not in retrieved_chunks:
                 retrieved_chunks.append(result)
 
+            _call_id = tc.get("id") or ("call_%d" % i)
+            if tool_trace is not None:
+                tool_trace.append({"role": "tool", "content": result, "tool_call_id": _call_id})
+
             messages.append({
                 "role": "tool",
                 "content": result,
+                "tool_call_id": _call_id,
             })
 
         messages = trim_messages(messages, max_tokens=rag_config.LLM_MAX_TOKENS)

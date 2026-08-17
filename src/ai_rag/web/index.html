@@ -142,7 +142,29 @@
 
   .side-foot { margin-top: auto; padding-top: 14px; border-top: 1px solid #f0f0f4; font-size: 11.5px; color: var(--text-3); display: flex; flex-direction: column; gap: 6px; }
 
-  /* ============ 主聊天区 ============ */
+    /* ============ 会话列表 ============ */
+  .new-conv {
+    width: 100%; margin-bottom: 8px; padding: 8px 12px;
+    border: 1px dashed var(--accent); border-radius: 10px;
+    background: var(--accent-soft); color: var(--accent);
+    font-size: 12.5px; cursor: pointer; transition: all .16s ease;
+  }
+  .new-conv:hover { background: #e0e7ff; }
+  .conv-list { display: flex; flex-direction: column; gap: 6px; max-height: 200px; overflow-y: auto; margin-bottom: 10px; }
+  .conv-list::-webkit-scrollbar { width: 4px; }
+  .conv-list::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; }
+  .conv-item {
+    display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: 10px;
+    background: #f9fafb; border: 1px solid #eef0f4; cursor: pointer; font-size: 12.5px;
+    transition: all .14s ease;
+  }
+  .conv-item:hover { background: var(--accent-soft); }
+  .conv-item.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .conv-item .conv-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conv-del { border: none; background: none; color: var(--text-3); cursor: pointer; font-size: 11px; padding: 2px; }
+  .conv-del:hover { color: var(--red); }
+
+/* ============ 主聊天区 ============ */
   .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   .chat-scroll { flex: 1; overflow-y: auto; }
   .chat-inner { max-width: 780px; margin: 0 auto; padding: 26px 22px 10px; display: flex; flex-direction: column; gap: 4px; }
@@ -242,6 +264,9 @@
 <div class="layout">
   <!-- 左侧：知识库 / 上传 -->
   <aside class="sidebar">
+    <div class="sec-title">💬 会话</div>
+    <button class="new-conv" id="newConvBtn">＋ 新建对话</button>
+    <div class="conv-list" id="convList"></div>
     <div class="sec-title">📚 知识库</div>
     <div class="dropzone" id="drop">
       <div class="dz-icon">📤</div>
@@ -308,6 +333,69 @@ function handle401() {
 const $ = id => document.getElementById(id);
 const chatBox = $('chatBox'), input = $('input'), upList = $('upList'), chatScroll = $('chatScroll');
 let sending = false;
+/* 会话管理 */
+let currentConvId = null;
+
+function resetChat() {
+  chatBox.innerHTML = '';
+  const w = document.createElement('div'); w.className = 'welcome'; w.id = 'welcome';
+  w.innerHTML = '<div class="orb">🤖</div><h2>你好，我是知识库助手</h2><p>可以问我关于制度、报销、假期等问题</p>';
+  chatBox.appendChild(w);
+}
+async function loadConversations() {
+  const resp = await fetch('/api/rag/conversations?user_id=' + encodeURIComponent(userId), { headers: apiHeaders(false) });
+  if (resp.status === 401) { handle401(); return; }
+  try {
+    const j = await resp.json();
+    renderConvList(j.conversations || []);
+  } catch (e) {}
+}
+function renderConvList(convs) {
+  const el = $('convList'); el.innerHTML = '';
+  convs.forEach(c => {
+    const item = document.createElement('div');
+    item.className = 'conv-item' + (c.id === currentConvId ? ' active' : '');
+    const title = document.createElement('span'); title.className = 'conv-title'; title.textContent = c.title || '新对话';
+    const del = document.createElement('button'); del.className = 'conv-del'; del.textContent = '✕'; del.title = '删除会话';
+    del.onclick = e => { e.stopPropagation(); deleteConversation(c.id); };
+    item.onclick = () => openConversation(c.id);
+    item.appendChild(title); item.appendChild(del);
+    el.appendChild(item);
+  });
+}
+async function newConversation() {
+  const resp = await fetch('/api/rag/conversations', { method: 'POST', headers: apiHeaders(true), body: JSON.stringify({ user_id: userId }) });
+  if (resp.status === 401) { handle401(); return; }
+  const j = await resp.json();
+  currentConvId = j.conversation.id;
+  resetChat();
+  loadConversations();
+}
+async function openConversation(id) {
+  currentConvId = id;
+  loadConversations();
+  const resp = await fetch('/api/rag/conversations/' + id + '/messages?user_id=' + encodeURIComponent(userId), { headers: apiHeaders(false) });
+  if (resp.status === 401) { handle401(); return; }
+  const j = await resp.json();
+  chatBox.innerHTML = '';
+  const msgs = j.messages || [];
+  msgs.forEach(m => {
+    if (m.role === 'user') addMsg('user', m.content);
+    else if (m.role === 'assistant') addMsg('ai', m.content);
+  });
+  if (!msgs.length) resetChat();
+  scrollBottom();
+}
+async function deleteConversation(id) {
+  if (!confirm('确定删除该对话吗？此操作不可恢复。')) return;
+  const resp = await fetch('/api/rag/conversations/' + id + '?user_id=' + encodeURIComponent(userId), { method: 'DELETE', headers: apiHeaders(false) });
+  if (resp.status === 401) { handle401(); return; }
+  if (currentConvId === id) { currentConvId = null; resetChat(); }
+  loadConversations();
+}
+$('newConvBtn').onclick = newConversation;
+loadConversations();
+
 
 /* 快捷问题 */
 document.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => {
@@ -352,10 +440,16 @@ async function sendMessage() {
   bubble.appendChild(caret);
   sending = true; $('sendBtn').disabled = true;
   try {
+    if (!currentConvId) {
+      const cr = await fetch('/api/rag/conversations', { method: 'POST', headers: apiHeaders(true), body: JSON.stringify({ user_id: userId }) });
+      if (cr.status === 401) { handle401(); return; }
+      const cj = await cr.json();
+      currentConvId = cj.conversation.id;
+    }
     const resp = await fetch('/api/rag/chat/stream', {
       method: 'POST',
       headers: apiHeaders(true),
-      body: JSON.stringify({ messages: [{ role: 'user', content: text }], user_id: userId, stream: true })
+      body: JSON.stringify({ messages: [{ role: 'user', content: text }], user_id: userId, stream: true, conversation_id: currentConvId })
     });
     if (resp.status === 401) { handle401(); return; }
     if (!resp.ok) {
@@ -388,6 +482,7 @@ async function sendMessage() {
   } finally {
     sending = false; $('sendBtn').disabled = false;
     scrollBottom();
+    if (currentConvId) loadConversations();
   }
 }
 input.addEventListener('keydown', e => {

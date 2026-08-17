@@ -11,6 +11,14 @@ from ai_rag.core.chat_store import (
 router = APIRouter()
 
 
+def _get_owned(conv_id: str, user_id: str):
+    """Return the conversation only when it belongs to user_id (404 otherwise)."""
+    conv = get_conversation(conv_id)
+    if not conv or conv.user_id != user_id:
+        raise HTTPException(404, "会话不存在")
+    return conv
+
+
 class CreateConvReq(BaseModel):
     user_id: str
     title: str = "新对话"
@@ -33,24 +41,21 @@ async def api_create_conversation(req: CreateConvReq):
 
 
 @router.get("/conversations/{conv_id}/messages")
-async def api_get_messages(conv_id: str):
-    if not get_conversation(conv_id):
-        raise HTTPException(404, "会话不存在")
+async def api_get_messages(conv_id: str, user_id: str):
+    _get_owned(conv_id, user_id)
     msgs = list_messages(conv_id)
     return {"status": "success", "messages": [m.model_dump() for m in msgs]}
 
 
 @router.patch("/conversations/{conv_id}")
-async def api_rename(conv_id: str, req: RenameReq):
+async def api_rename(conv_id: str, req: RenameReq, user_id: str):
+    _get_owned(conv_id, user_id)
     conv = rename_conversation(conv_id, req.title)
-    if not conv:
-        raise HTTPException(404, "会话不存在")
     return {"status": "success", "conversation": conv.model_dump()}
 
 
 @router.delete("/conversations/{conv_id}")
-async def api_delete(conv_id: str):
-    ok = delete_conversation(conv_id)
-    if not ok:
-        raise HTTPException(404, "会话不存在")
+async def api_delete(conv_id: str, user_id: str):
+    _get_owned(conv_id, user_id)
+    delete_conversation(conv_id)
     return {"status": "success"}

@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 """多轮对话存储：会话 + 消息（SQLite via SQLModel）"""
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import logging
 from typing import List, Optional
 
 from sqlmodel import SQLModel, Field, Session, create_engine, select
 
 from ai_rag.core.config import PROJECT_ROOT
+
+logger = logging.getLogger(__name__)
 
 _DB_DIR = PROJECT_ROOT / "data"
 _DB_DIR.mkdir(parents=True, exist_ok=True)
@@ -36,7 +39,28 @@ def init_db():
     SQLModel.metadata.create_all(engine)
 
 
+def cleanup_old_conversations(days: int = 30) -> int:
+    """Delete conversations not updated within `days` days (with their messages)."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    deleted = 0
+    with Session(engine) as s:
+        stale = list(s.exec(select(Conversation).where(Conversation.updated_at < cutoff)))
+        for conv in stale:
+            for m in s.exec(select(Message).where(Message.conversation_id == conv.id)):
+                s.delete(m)
+            s.delete(conv)
+            deleted += 1
+        s.commit()
+    if deleted:
+        logger.info("[ChatStore] cleanup old conversations: %d", deleted)
+    return deleted
+
+
 def create_conversation(user_id: str, title: str = "新对话") -> Conversation:
+    try:
+        cleanup_old_conversations(days=30)
+    except Exception as e:
+        logger.warning("[ChatStore] auto cleanup failed: %s", e)
     with Session(engine) as s:
         conv = Conversation(user_id=user_id, title=title)
         s.add(conv); s.commit(); s.refresh(conv)
