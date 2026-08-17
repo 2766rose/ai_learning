@@ -43,4 +43,6 @@ class CircuitBreaker:
             return self._opened_at is not None and time.time() - self._opened_at < self.cooldown
 
 
-llm_circuit_breaker = CircuitBreaker()
+from ai_rag.core.redis_stability import RedisCircuitBreaker
+
+llm_circuit_breaker = RedisCircuitBreaker()

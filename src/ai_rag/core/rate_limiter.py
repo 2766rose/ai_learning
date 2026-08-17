@@ -29,4 +29,6 @@ class RateLimiter:
             return True, 0
 
 
-rate_limiter = RateLimiter()
+from ai_rag.core.redis_stability import RedisRateLimiter
+
+rate_limiter = RedisRateLimiter()

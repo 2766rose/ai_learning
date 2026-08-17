@@ -52,4 +52,6 @@ class SemanticCache:
             return len(self._items)
 
 
-semantic_cache = SemanticCache()
+from ai_rag.core.redis_stability import RedisSemanticCache
+
+semantic_cache = RedisSemanticCache()
