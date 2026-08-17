@@ -3,6 +3,7 @@ import os
 import uuid
 import json
 import logging
+import re
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
@@ -52,6 +53,15 @@ def _check_conv_owner(conv_id, user_id):
     conv = get_conversation(conv_id)
     if conv is not None and user_id and conv.user_id != user_id:
         raise HTTPException(404, "会话不存在")
+
+
+def _cacheable(answer: str) -> bool:
+    """Only cache answers with [n] source citations (grounded), avoiding cache poisoning."""
+    if not answer or len(answer) < 10:
+        return False
+    if "未找到" in answer or "没有找到" in answer:
+        return False
+    return re.search(r"\[\d+\]", answer) is not None
 
 _celery_publish_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="celery-pub")
 
@@ -223,7 +233,7 @@ async def chat(request: ChatRequest, raw_request: Request):
             trace_id=str(uuid.uuid4()),
             retrieved_knowledge=retrieved_knowledge,
         )
-        if ai_answer and len(ai_answer) >= 10 and "未找到" not in ai_answer and "没有找到" not in ai_answer:
+        if _cacheable(ai_answer):
             semantic_cache.put(_q_emb, ai_answer)
         safe_update_output(obs, output=ai_answer)
         if request.conversation_id:
@@ -310,7 +320,7 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
                 error_payload = json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False)
                 yield f"data: {error_payload}\n\n"
 
-            if full_answer and len(full_answer) >= 10 and "未找到" not in full_answer and "没有找到" not in full_answer:
+            if _cacheable(full_answer):
                 semantic_cache.put(_q_emb, full_answer)
             safe_update_output(obs, output=full_answer)
             if request.conversation_id:
@@ -324,6 +334,24 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+
+@router.get("/search")
+async def api_debug_search(q: str, top_k: int = 5, rerank: str = "on"):
+    """Retrieval debug: return raw hybrid hits (document/similarity/score) for tuning."""
+    from ai_rag.retrieval.retriever import hybrid_retriever_service
+    use_rerank = rerank.strip().lower() == "on"
+    hits = await hybrid_retriever_service.search(query=q, top_k=top_k, where=None, rerank=use_rerank)
+    out = []
+    for h in hits:
+        out.append({
+            "document": (h.get("document") or "")[:300],
+            "metadata": h.get("metadata") or {},
+            "score": round(float(h.get("score", 0.0)), 4),
+            "similarity": round(float(h.get("similarity", 0.0)), 4),
+        })
+    return {"status": "success", "query": q, "hits": out}
 
 
 # ==================== 5. Agent 工具管理 ====================

@@ -2,6 +2,7 @@
 import logging
 from pathlib import Path
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ai_rag.core.lifespan import lifespan         
@@ -23,6 +24,13 @@ app.include_router(rag_router, prefix="/api/rag", tags=["RAG"])
 app.include_router(conv_router, prefix="/api/rag", tags=["Conversation"])
 
 logger = logging.getLogger(__name__)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request, exc):
+    logger.exception("Unhandled exception | path=%s", request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "%s: %s" % (type(exc).__name__, str(exc)[:500])})
+
 
 @app.get("/health")
 async def health_check():

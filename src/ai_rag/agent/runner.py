@@ -11,6 +11,7 @@ v2（2026-08-14）：
 
 import json
 import logging
+import re
 from typing import AsyncGenerator, Union, List, Dict, Any, Tuple, Optional
 
 import httpx
@@ -81,7 +82,8 @@ SYSTEM_PROMPT = f"""你是企业知识库助手，严格遵守以下规则：
 2. 引用知识库内容时使用来源编号标注，如 [1][2]。
 3. 仅当 knowledge_search 返回空结果且无其他适用工具时，才回复："抱歉，知识库中未找到与您问题相关的信息。"
 4. 不要向用户提及工具名称、检索过程等内部实现细节。
-5. 金额、天数、比例、日期等所有具体数字必须逐字来自检索内容，严禁自行编造或推算；检索内容未覆盖的细节，明确回答"知识库中未找到相关信息"。"""
+5. 金额、天数、比例、日期等所有具体数字必须逐字来自检索内容，严禁自行编造或推算；检索内容未覆盖的细节，明确回答"知识库中未找到相关信息"。
+6. 若检索结果中存在与问题相关的信息（包括部分相关），必须依据它回答并标注来源，不要因内容不完整或表述不同而拒绝回答；只有当检索结果为空或与问题完全无关时，才回答“抱歉，知识库中未找到与您问题相关的信息。”。严禁依据常识、通用知识或推测作答。"""
 
 # 全局 HTTP 客户端（复用连接池）
 _http_client = httpx.AsyncClient(
@@ -386,6 +388,9 @@ async def agent_run(
         logger.exception("⚠️ [Memory] 检索失败，降级使用基础 Prompt | user=%s | session=%s", user_id, session_id)
 
     # 2. 构建初始消息
+    retrieved_chunks: List[str] = []
+    kb_had_content = False
+    other_tool_content = False
     # 预检索：不依赖模型工具调用，先把知识库结果注入上下文
     try:
         _ctx = await _execute_tool("knowledge_search", {"query": user_message})
@@ -394,6 +399,10 @@ async def agent_run(
                 system_content += "\n\n【知识库检索结果】知识库中未找到与用户问题相关的信息。"
             else:
                 system_content += ("\n\n【知识库检索结果】以下内容可能包含与用户问题相关的信息：\n" + _ctx + "\n（若上述内容与问题无关，请忽略；若相关，请严格依据其回答并标注来源编号）")
+            if _ctx != "No relevant information found in knowledge base.":
+                kb_had_content = True
+            if _ctx not in retrieved_chunks:
+                retrieved_chunks.append(_ctx)
             logger.info("[RAG] 知识库预检索注入 | len=%d | user=%s", len(_ctx), user_id)
     except Exception as e:
         logger.warning("[RAG] 知识库预检索失败 | user=%s | error=%s", user_id, e)
@@ -413,7 +422,6 @@ async def agent_run(
         return _stream_tool_loop(messages, session_id, user_id=user_id, tool_trace=tool_trace)
 
     # ====== 非流式模式 ======
-    retrieved_chunks: List[str] = []
 
     for iteration in range(MAX_AGENT_ITERATIONS):
         tool_calls = None
@@ -458,6 +466,12 @@ async def agent_run(
                 "💬 [Agent] 最终回答 | session=%s | iter=%d | len=%d",
                 session_id, iteration, len(final_content),
             )
+            # Deterministic anti-hallucination guard: no KB context + no other tool + digit-bearing claim => refuse
+            if (not kb_had_content and not other_tool_content
+                    and "未找到" not in final_content and "没有找到" not in final_content
+                    and re.search(r"\d", final_content)):
+                logger.warning("[Agent] hallucination guard | session=%s | len=%d", session_id, len(final_content))
+                final_content = "抱歉，知识库中未找到与您问题相关的信息。"
             retrieved_knowledge = "\n\n---\n\n".join(retrieved_chunks) if retrieved_chunks else ""
             return final_content, retrieved_knowledge
 
@@ -476,8 +490,14 @@ async def agent_run(
             )
             result = await _execute_tool(tc["name"], tc["arguments"], user_id=user_id)
 
-            if tc["name"] == "knowledge_search" and result not in retrieved_chunks:
-                retrieved_chunks.append(result)
+            if tc["name"] == "knowledge_search":
+                if result and result != "No relevant information found in knowledge base." and "检索失败" not in result:
+                    kb_had_content = True
+                if result not in retrieved_chunks:
+                    retrieved_chunks.append(result)
+            else:
+                if result and result.strip() and "error" not in result.lower():
+                    other_tool_content = True
 
             _call_id = tc.get("id") or ("call_%d" % i)
             if tool_trace is not None:

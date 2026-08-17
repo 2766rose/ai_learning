@@ -6,37 +6,64 @@
 评判 LLM：本地 Ollama qwen3:8b（OpenAI 兼容接口）
 用法: python eval_ragas.py
 """
-import json, os, sys, urllib.request
+import json, os, sys, time, urllib.request
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 OLLAMA_V1 = "http://127.0.0.1:11434/v1"
 FT_MODEL = "qwen2.5-3b-ft:latest"
 JUDGE_MODEL = os.environ.get("RAGAS_JUDGE", "qwen2.5:7b")
 RAG_API = "http://localhost:8000/api/rag/chat"
-EVAL_FILE = r"D:\ai_learning\data\staff_qa_eval_large.json"
+EVAL_FILE = r"D:\ai_learning\data\staff_qa_eval_50.json"
 
 # ---------- 1. 取回答 ----------
 def ollama_chat(model, q, max_tokens=200):
     payload = {"model": model, "messages": [{"role": "user", "content": q}], "stream": False, "options": {"temperature": 0.1, "num_predict": max_tokens}}
     req = urllib.request.Request(OLLAMA_V1.replace("/v1", "/api/chat"), data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
-    resp = urllib.request.urlopen(req, timeout=180)
+    resp = urllib.request.urlopen(req, timeout=600)
     return (json.loads(resp.read().decode("utf-8")).get("message") or {}).get("content", "").strip()
 
 def rag_chat(q):
     payload = {"messages": [{"role": "user", "content": q}], "user_id": "ragas-eval", "stream": False}
     req = urllib.request.Request(RAG_API, data=json.dumps(payload).encode("utf-8"), headers=_api_headers())
-    resp = urllib.request.urlopen(req, timeout=180)
-    d = json.loads(resp.read().decode("utf-8"))
-    return d.get("ai_answer", "").strip(), d.get("retrieved_knowledge", "") or ""
+    last = None
+    for _try in range(3):
+        try:
+            resp = urllib.request.urlopen(req, timeout=600)
+            d = json.loads(resp.read().decode("utf-8"))
+            return d.get("ai_answer", "").strip(), d.get("retrieved_knowledge", "") or ""
+        except Exception as e:
+            last = e
+            print("  [eval] RAG call retry %d: %s" % (_try + 1, type(e).__name__))
+            time.sleep(5)
+    raise last
 
-data = json.load(open(EVAL_FILE, encoding="utf-8"))[:20]
+
+def _api_headers():
+    import os
+    _k = ""
+    try:
+        for _l in open(r"D:\ai_learning\.env", "r", encoding="utf-8"):
+            _l = _l.strip()
+            if _l.startswith("RAG_API_KEY="):
+                _k = _l.split("=", 1)[1].strip()
+                break
+    except Exception:
+        pass
+    _h = {"Content-Type": "application/json"}
+    if _k:
+        _h["X-API-Key"] = _k
+    return _h
+
+
+data = json.load(open(EVAL_FILE, encoding="utf-8"))[:int(os.environ.get("EVAL_COUNT", "50"))]
 print(f"评估样本数: {len(data)}")
 
 ft_records, rag_records = [], []
 for i, ex in enumerate(data):
     q, ref = ex["instruction"], ex["output"]
-    ft = ollama_chat(FT_MODEL, q)
-    ft_records.append({"question": q, "answer": ft, "reference": ref})
+    if os.environ.get("RAGAS_SKIP_FT") != "1":
+        ft = ollama_chat(FT_MODEL, q)
+        ft_records.append({"question": q, "answer": ft, "reference": ref})
     try:
         rag, ctx = rag_chat(q)
         rag_records.append({"question": q, "answer": rag, "reference": ref, "contexts": [ctx] if ctx else []})
@@ -47,6 +74,9 @@ for i, ex in enumerate(data):
         print(f"  已取 {i+1}/{len(data)}")
 
 print("微调模型回答完成:", len(ft_records), "| RAG回答完成:", len(rag_records))
+with open(r"D:\ai_learning\data\eval_results.json", "w", encoding="utf-8") as _f:
+    json.dump(rag_records, _f, ensure_ascii=False, indent=2)
+print("详细结果已落盘: D:\\ai_learning\\data\\eval_results.json")
 
 # ---------- 0. ragas 0.2.15 兼容桩（新版 langchain-community 移除了 vertexai，评估用不到） ----------
 import sys, types
@@ -97,22 +127,6 @@ def avg_correctness(records):
         s += judge_correctness(r["question"], r["answer"], r["reference"])
     return s / len(records)
 from ragas.metrics import answer_correctness, faithfulness
-def _api_headers():
-    import os
-    _k = ""
-    try:
-        for _l in open(r"D:\ai_learning\.env", "r", encoding="utf-8"):
-            _l = _l.strip()
-            if _l.startswith("RAG_API_KEY="):
-                _k = _l.split("=", 1)[1].strip()
-                break
-    except Exception:
-        pass
-    _h = {"Content-Type": "application/json"}
-    if _k:
-        _h["X-API-Key"] = _k
-    return _h
-
 
 llm = ChatOpenAI(model=JUDGE_MODEL, base_url=OLLAMA_V1, api_key="ollama", temperature=0)
 

@@ -153,6 +153,16 @@ class RedisSemanticCache:
                 if len(self._local) > self.max_entries:
                     self._local = self._local[-self.max_entries:]
 
+    def clear(self):
+        """Flush all semantic cache entries (call after knowledge base updates)."""
+        try:
+            r = _get_client()
+            for k in r.scan_iter("sc:*", count=200):
+                r.delete(k)
+        except Exception:
+            with self._lock:
+                self._local = []
+
     def size(self):
         try:
             return len(list(_get_client().scan_iter("sc:*", count=500)))

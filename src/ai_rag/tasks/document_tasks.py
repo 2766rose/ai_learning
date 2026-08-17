@@ -64,6 +64,12 @@ def ingest_document_task(self, file_path: str, metadata: dict = None) -> dict:
             "✅ document_ingested | task_id=%s | chunks=%d | file=%s",
             task_id, chunk_count, abs_path,
         )
+        # 知识库变更后清空语义缓存，避免旧答案被错误命中
+        try:
+            from ai_rag.core.semantic_cache import semantic_cache
+            semantic_cache.clear()
+        except Exception:
+            logger.warning("semantic cache clear failed", exc_info=True)
         return {
             "status": "completed",
             "task_id": task_id,

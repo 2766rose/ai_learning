@@ -78,7 +78,10 @@ def trim_messages(messages, max_tokens=4000):
             
         # 情况 B: Assistant 发起的工具调用
         if role == "assistant" and msg.get("tool_calls"):
-            call_ids_in_this_msg = {tc.id for tc in msg.tool_calls}
+            call_ids_in_this_msg = {
+                tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                for tc in msg.get("tool_calls", [])
+            }
             # 铁律：如果对应的 tool 结果不在保留列表中，这个 assistant 也不能要
             if not call_ids_in_this_msg.issubset(kept_tool_call_ids):
                 print(f"   ✂️ 丢弃不完整的 Assistant 工具调用 (Token: {msg_tokens})")

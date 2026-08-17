@@ -18,10 +18,12 @@ def _similarity(h: Dict[str, Any]) -> float:
         return float(h["similarity"])
     return float(h.get("score", 0.0))
 
-# 可调参数：根据实际召回质量调整，建议范围 0.3~0.6
-# 2026-08-14：text2vec 对长混合块的相似度普遍在 0.35~0.55，0.5 会误杀相关块导致模型编造，
-# 下调到 0.35 并让 RRF 排序兜底（排后面的低分结果自然被 top_k 截断）。
-MIN_SIMILARITY = 0.35
+# Retrieval quality knobs (tuned 2026-08-17):
+# - MIN_SIMILARITY: vector-sim floor. text2vec long mixed chunks score ~0.30-0.55;
+#   0.35 dropped the 'work hours' chunk (0.333) -> lowered to 0.30.
+# - RERANK_MIN_SCORE: rerank logit below this => no relevant info (anti-hallucination gate).
+MIN_SIMILARITY = 0.30
+RERANK_MIN_SCORE = 0.20
 # 2026-08-14：控制工具返回体量（3 块 × 300 字），避免检索结果过大导致上下文裁剪塌缩/循环
 MAX_CHUNK_CHARS = 450
 MAX_FORMATTED_CHUNKS = 3
@@ -67,6 +69,13 @@ async def knowledge_search_handler(
             )
 
         # 阈值过滤
+        # 相关性门槛：重排分过低视为无相关信息（防幻觉抦底）
+        if use_rerank and hits:
+            _top_score = float(hits[0].get("score", 0.0))
+            if _top_score < RERANK_MIN_SCORE:
+                logger.info("No relevant info (rerank top=%.4f < %.2f) | query=%s", _top_score, RERANK_MIN_SCORE, query[:60])
+                return NO_RESULT_MSG
+
         filtered_hits = [
             h for h in hits
             if _similarity(h) >= MIN_SIMILARITY
