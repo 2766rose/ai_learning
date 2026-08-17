@@ -22,6 +22,7 @@ services:
       - redis
     volumes:
       - ./data/chroma_db:/app/data/chroma_db
+      - ./data/memory_db:/app/data/memory_db
       - D:/models:/models:ro
       - ./uploads:/app/uploads
 
@@ -42,5 +43,6 @@ services:
     command: celery -A ai_rag.tasks.celery_app worker --loglevel=info --concurrency=1 --pool=solo
     volumes:
       - ./data/chroma_db:/app/data/chroma_db
+      - ./data/memory_db:/app/data/memory_db
       - D:/models:/models:ro
       - ./uploads:/app/uploads
