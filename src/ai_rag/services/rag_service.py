@@ -24,6 +24,7 @@ def _similarity(h: Dict[str, Any]) -> float:
 # - RERANK_MIN_SCORE: rerank logit below this => no relevant info (anti-hallucination gate).
 MIN_SIMILARITY = 0.30
 RERANK_MIN_SCORE = 0.20
+VEC_GATE_SCORE = 0.55  # 重排分低时的向量相似度附加门槛（双信号才拦截）
 # 2026-08-14：控制工具返回体量（3 块 × 300 字），避免检索结果过大导致上下文裁剪塌缩/循环
 MAX_CHUNK_CHARS = 450
 MAX_FORMATTED_CHUNKS = 3
@@ -73,8 +74,10 @@ async def knowledge_search_handler(
         # 相关性门槛：重排分过低视为无相关信息（防幻觉抦底）
         if use_rerank and hits:
             _top_score = float(hits[0].get("score", 0.0))
-            if _top_score < RERANK_MIN_SCORE:
-                logger.info("No relevant info (rerank top=%.4f < %.2f) | query=%s", _top_score, RERANK_MIN_SCORE, query[:60])
+            _top_sim = float(hits[0].get("similarity", 0.0))
+            # 双信号门槛：仅当重排分和向量相似度都低时才视为无相关信息（避免误杀像保密这类重排分低但向量相似度高的真问题）
+            if _top_score < RERANK_MIN_SCORE and _top_sim < VEC_GATE_SCORE:
+                logger.info("No relevant info (rerank=%.4f vec=%.3f) | query=%s", _top_score, _top_sim, query[:60])
                 return NO_RESULT_MSG
 
         # 相关性过滤：rerank 开启时用重排分（Cross-Encoder 更准），否则用向量相似度
