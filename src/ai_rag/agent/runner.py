@@ -21,7 +21,7 @@ from ai_rag.agent.memory import retrieve_memories
 from ai_rag.utils.context_trimmer import trim_messages, ENCODER
 from ai_rag.core.observability import observe, start_observation, end_observation, safe_usage_update, safe_update_output
 from ai_rag.core.circuit_breaker import llm_circuit_breaker
-from ai_rag.core.answer_guard import should_refuse, REFUSAL_MESSAGE
+from ai_rag.core.answer_guard import should_refuse, REFUSAL_MESSAGE, COMPANY_HINT
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ SYSTEM_PROMPT = f"""你是企业知识库助手，严格遵守以下规则：
 3. 仅当 knowledge_search 返回空结果且无其他适用工具时，才回复："抱歉，知识库中未找到与您问题相关的信息。"
 4. 不要向用户提及工具名称、检索过程等内部实现细节。
 5. 金额、天数、比例、日期等所有具体数字必须逐字来自检索内容，严禁自行编造或推算；检索内容未覆盖的细节，明确回答"知识库中未找到相关信息"。
-6. 若检索结果中存在与问题相关的信息（包括部分相关），必须依据它回答并标注来源，不要因内容不完整或表述不同而拒绝回答；只有当检索结果为空或与问题完全无关时，才回答“抱歉，知识库中未找到与您问题相关的信息。”。严禁依据常识、通用知识或推测作答。"""
+6. 若检索结果中存在与问题相关的信息（包括部分相关），必须依据它回答并标注来源，不要因内容不完整或表述不同而拒绝回答。当检索结果为空或与问题完全无关时：公司制度/业务/参数/内部数据类问题，回答“抱歉，知识库中未找到与您问题相关的信息。”；常识/通识类问题（文学、历史、地理、科学、日常知识等），可依据自身知识简要回答，但严禁编造公司内部信息。"""
 
 # 全局 HTTP 客户端（复用连接池）
 _http_client = httpx.AsyncClient(
@@ -251,6 +251,7 @@ async def _stream_tool_loop(
     max_iterations: int = MAX_AGENT_ITERATIONS,
     tool_trace: Optional[List[Dict[str, Any]]] = None,
     kb_had_content: bool = False,
+    query: str = "",
 ) -> AsyncGenerator[str, None]:
     """
     全流式 Tool Calling 循环（基于 Ollama 原生 /api/chat）。
@@ -362,7 +363,7 @@ async def _stream_tool_loop(
         )
         if _buffering:
             _full = "".join(_buffer)
-            if should_refuse(_full, _kb_had, _other_had):
+            if should_refuse(_full, _kb_had, _other_had, query=query):
                 logger.warning("[Stream] hallucination guard | session=%s | len=%d", session_id, len(_full))
                 _full = REFUSAL_MESSAGE
             if _full:
@@ -443,7 +444,10 @@ async def agent_run(
                     retrieved_chunks.append(_pctx)
                 logger.info("[RAG] 个人域预检索注入 | len=%d | user=%s", len(_pctx), user_id)
             else:
-                system_content += "\n\n【知识库检索结果】知识库中未找到与用户问题相关的信息。"
+                if any(k in user_message for k in COMPANY_HINT):
+                    system_content += "\n\n【知识库检索结果】知识库中未找到与您问题相关的信息。"
+                else:
+                    system_content += "\n\n【知识库检索结果】知识库中未检索到相关内容；常识/通识类问题可依据自身知识回答，但涉及公司内部信息时不得编造。"
     except Exception as e:
         logger.warning("[RAG] 知识库预检索失败 | user=%s | error=%s", user_id, e)
 
@@ -459,7 +463,7 @@ async def agent_run(
 
     # 3. 路由至流式或非流式处理
     if stream:
-        return _stream_tool_loop(messages, session_id, user_id=user_id, tool_trace=tool_trace, kb_had_content=kb_had_content)
+        return _stream_tool_loop(messages, session_id, user_id=user_id, tool_trace=tool_trace, kb_had_content=kb_had_content, query=user_message)
 
     # ====== 非流式模式 ======
 
@@ -507,7 +511,7 @@ async def agent_run(
                 session_id, iteration, len(final_content),
             )
             # Deterministic anti-hallucination guard: no KB context + no other tool + digit-bearing claim => refuse
-            if should_refuse(final_content, kb_had_content, other_tool_content):
+            if should_refuse(final_content, kb_had_content, other_tool_content, query=user_message):
                 logger.warning("[Agent] hallucination guard | session=%s | len=%d", session_id, len(final_content))
                 final_content = REFUSAL_MESSAGE
             retrieved_knowledge = "\n\n---\n\n".join(retrieved_chunks) if retrieved_chunks else ""

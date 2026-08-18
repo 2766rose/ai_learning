@@ -394,6 +394,7 @@ async function deleteConversation(id) {
   loadConversations();
 }
 $('newConvBtn').onclick = newConversation;
+$('sendBtn').onclick = sendMessage;
 loadConversations();
 
 
@@ -460,20 +461,20 @@ async function sendMessage() {
     }
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
-    let buf = '', full = '', gotAny = false;
-    while (true) {
+    let buf = '', full = '', gotAny = false, finished = false;
+    while (!finished) {
       const { done, value } = await reader.read();
       if (done) break;
       buf += dec.decode(value, { stream: true });
       let idx;
-      while ((idx = buf.indexOf('\n')) >= 0) {
+      while (!finished && (idx = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, idx).trim(); buf = buf.slice(idx + 1);
         if (!line.startsWith('data: ')) continue;
         const raw = line.slice(6); if (!raw) continue;
         let data; try { data = JSON.parse(raw); } catch (e) { continue; }
         if (data.type === 'chunk') { gotAny = true; full += data.data; bubble.textContent = full; scrollBottom(); }
         else if (data.type === 'error') { gotAny = true; bubble.textContent = full + '\n⚠️ ' + data.message; scrollBottom(); }
-        else if (data.type === 'done') { break; }
+        else if (data.type === 'done') { finished = true; }
       }
     }
     if (!full && !gotAny) bubble.textContent = '⚠️ 没有收到回复';
