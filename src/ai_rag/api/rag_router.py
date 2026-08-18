@@ -45,6 +45,23 @@ def _store_tool_trace(conv_id: str, trace) -> None:
             )
 
 
+async def _auto_save_memories(user_id: str, user_message: str, answer: str) -> None:
+    """Background auto-extraction: save durable user facts after each turn (non-blocking)."""
+    if not user_id or not answer:
+        return
+    try:
+        from ai_rag.agent.memory import extract_memories, save_memories_with_dedup
+        facts = await extract_memories([
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": answer},
+        ])
+        if facts:
+            await save_memories_with_dedup(user_id, facts)
+            logger.info("[Memory] auto-saved %d facts | user=%s", len(facts), user_id)
+    except Exception as e:
+        logger.warning("[Memory] auto-extract failed | user=%s | err=%s", user_id, e)
+
+
 def _check_conv_owner(conv_id, user_id):
     """Reject writes to a conversation owned by another user."""
     if not conv_id:
@@ -234,6 +251,7 @@ async def chat(request: ChatRequest, raw_request: Request):
             add_message(request.conversation_id, "user", user_message)
             _store_tool_trace(request.conversation_id, _tool_trace)
             add_message(request.conversation_id, "assistant", ai_answer)
+        asyncio.create_task(_auto_save_memories(request.user_id or "anonymous", user_message, ai_answer))
         return resp
     finally:
         end_observation(obs)
@@ -321,6 +339,7 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
                 add_message(request.conversation_id, "user", user_message)
                 _store_tool_trace(request.conversation_id, _tool_trace)
                 add_message(request.conversation_id, "assistant", full_answer)
+            asyncio.create_task(_auto_save_memories(request.user_id or "anonymous", user_message, full_answer))
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
     return StreamingResponse(

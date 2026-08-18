@@ -64,7 +64,7 @@ SYSTEM_PROMPT = f"""你是企业知识库助手，严格遵守以下规则：
 按以下优先级判断，命中即执行，不再继续向下匹配：
 1. 时间/日期/当前时刻 → get_current_time
 2. 天气/气温/降雨/风力等 → get_weather
-3. 企业内部知识/文档/业务规范/产品手册 → knowledge_search
+3. 企业内部知识/文档/业务规范/产品手册 → knowledge_search(domain="company")；个人学习、面试笔记等私人资料 → knowledge_search(domain="personal")；不确定时默认 company
 4. 当用户自我介绍、告知姓名/偏好/职业/身份等个人稳定信息时，必须调用 save_user_memory 保存 → save_user_memory
 5. 以上均不适用 → 直接基于对话上下文回答，不调用任何工具
 
@@ -422,17 +422,28 @@ async def agent_run(
     other_tool_content = False
     # 预检索：不依赖模型工具调用，先把知识库结果注入上下文
     try:
-        _ctx = await _execute_tool("knowledge_search", {"query": user_message})
-        if _ctx and _ctx.strip() and "检索失败" not in _ctx:
-            if _ctx == "No relevant information found in knowledge base.":
-                system_content += "\n\n【知识库检索结果】知识库中未找到与用户问题相关的信息。"
-            else:
-                system_content += ("\n\n【知识库检索结果】以下内容可能包含与用户问题相关的信息：\n" + _ctx + "\n（若上述内容与问题无关，请忽略；若相关，请严格依据其回答并标注来源编号）")
-            if _ctx != "No relevant information found in knowledge base.":
-                kb_had_content = True
+        _ctx = await _execute_tool("knowledge_search", {"query": user_message, "domain": "company"})
+        _has_company = bool(_ctx and _ctx.strip() and "检索失败" not in _ctx
+                            and _ctx != "No relevant information found in knowledge base.")
+        if _has_company:
+            system_content += ("\n\n【企业知识域检索结果】以下内容可能包含与用户问题相关的信息：\n" + _ctx + "\n（若上述内容与问题无关，请忽略；若相关，请严格依据其回答并标注来源编号）")
+            kb_had_content = True
             if _ctx not in retrieved_chunks:
                 retrieved_chunks.append(_ctx)
-            logger.info("[RAG] 知识库预检索注入 | len=%d | user=%s", len(_ctx), user_id)
+            logger.info("[RAG] 企业域预检索注入 | len=%d | user=%s", len(_ctx), user_id)
+        else:
+            # 企业域无结果 → 回退检索个人学习/面试资料域
+            _pctx = await _execute_tool("knowledge_search", {"query": user_message, "domain": "personal"})
+            _has_personal = bool(_pctx and _pctx.strip() and "检索失败" not in _pctx
+                                 and _pctx != "No relevant information found in knowledge base.")
+            if _has_personal:
+                system_content += ("\n\n【个人学习域检索结果】以下为个人学习/面试资料，可能包含与用户问题相关的信息：\n" + _pctx + "\n（若与问题相关，请依据其回答并标注来源编号）")
+                kb_had_content = True
+                if _pctx not in retrieved_chunks:
+                    retrieved_chunks.append(_pctx)
+                logger.info("[RAG] 个人域预检索注入 | len=%d | user=%s", len(_pctx), user_id)
+            else:
+                system_content += "\n\n【知识库检索结果】知识库中未找到与用户问题相关的信息。"
     except Exception as e:
         logger.warning("[RAG] 知识库预检索失败 | user=%s | error=%s", user_id, e)
 

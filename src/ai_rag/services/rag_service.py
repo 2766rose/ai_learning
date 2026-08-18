@@ -33,6 +33,7 @@ NO_RESULT_MSG = "No relevant information found in knowledge base."
 async def knowledge_search_handler(
     query: str,
     session_id: Optional[str] = None,
+    domain: str = "company",
 ) -> str:
     """
     企业知识库检索工具（带诊断日志 + 安全兜底）
@@ -76,10 +77,20 @@ async def knowledge_search_handler(
                 logger.info("No relevant info (rerank top=%.4f < %.2f) | query=%s", _top_score, RERANK_MIN_SCORE, query[:60])
                 return NO_RESULT_MSG
 
-        filtered_hits = [
-            h for h in hits
-            if _similarity(h) >= MIN_SIMILARITY
-        ]
+        # 相关性过滤：rerank 开启时用重排分（Cross-Encoder 更准），否则用向量相似度
+        if use_rerank:
+            filtered_hits = [h for h in hits if float(h.get("score", 0.0)) >= 0.0]
+        else:
+            filtered_hits = [
+                h for h in hits
+                if _similarity(h) >= MIN_SIMILARITY
+            ]
+        # 知识域过滤：按元数据 domain 分离企业与个人知识（默认 company）
+        if domain and domain != "all":
+            filtered_hits = [
+                h for h in filtered_hits
+                if (h.get("metadata") or {}).get("domain", "company") == domain
+            ]
 
          # 🛡️ 安全兜底：若全部低于阈值，返回空字符串触发 System Prompt 兜底回复
         if not filtered_hits:
