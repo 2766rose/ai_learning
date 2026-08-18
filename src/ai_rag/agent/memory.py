@@ -13,12 +13,20 @@ from ai_rag.core.embeddings import embedding_service
 
 logger = logging.getLogger(__name__)
 
-# 复用全局 LLM 客户端
-llm_client = AsyncOpenAI(
-    api_key=rag_config.OPENAI_API_KEY,
-    base_url=rag_config.OPENAI_BASE_URL,
-    timeout=rag_config.LLM_TIMEOUT,
-)
+# 复用全局 LLM 客户端（懒加载：首次使用时才创建，避免缺少 API Key 时 import 崩溃）
+_llm_client = None
+
+
+def _get_llm_client() -> AsyncOpenAI:
+    global _llm_client
+    if _llm_client is None:
+        # Ollama 等本地服务不校验 key，空 key 时传 "ollama" 占位即可
+        _llm_client = AsyncOpenAI(
+            api_key=rag_config.OPENAI_API_KEY or "ollama",
+            base_url=rag_config.OPENAI_BASE_URL,
+            timeout=rag_config.LLM_TIMEOUT,
+        )
+    return _llm_client
 
 # ✅ 优化1：ChromaDB Client 模块级单例，避免重复初始化
 _chroma_client: Optional[chromadb.PersistentClient] = None
@@ -62,7 +70,7 @@ async def extract_memories(conversation: List[Dict[str, Any]]) -> List[str]:
 {conversation}"""
 
     try:
-        response = await llm_client.chat.completions.create(
+        response = await _get_llm_client().chat.completions.create(
             model=rag_config.OPENAI_MODEL,
             temperature=0.0,
             max_tokens=512,
