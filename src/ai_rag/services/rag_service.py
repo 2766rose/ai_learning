@@ -35,6 +35,9 @@ async def knowledge_search_handler(
     query: str,
     session_id: Optional[str] = None,
     domain: str = "company",
+    max_chunks: int = MAX_FORMATTED_CHUNKS,
+    chunk_chars: int = MAX_CHUNK_CHARS,
+    sort_by_chunk_index: bool = False,
 ) -> str:
     """
     企业知识库检索工具（带诊断日志 + 安全兜底）
@@ -104,10 +107,17 @@ async def knowledge_search_handler(
             return ""
 
         # 格式化输出（只保留前 MAX_FORMATTED_CHUNKS 块，控制体量）
+        # 可选：按文档顺序排列（索要全文时保持原文顺序）
+        if sort_by_chunk_index:
+            filtered_hits = sorted(
+                filtered_hits,
+                key=lambda h: int((h.get("metadata") or {}).get("chunk_index", 0)),
+            )
+
         formatted_parts = []
-        for i, h in enumerate(filtered_hits[:MAX_FORMATTED_CHUNKS], 1):
+        for i, h in enumerate(filtered_hits[:max_chunks], 1):
             sim = _similarity(h)
-            text = h.get("document", "")[:MAX_CHUNK_CHARS]
+            text = h.get("document", "")[:chunk_chars]
             formatted_parts.append(f"[{i}] (similarity:{sim:.3f}) {text}")
 
         formatted = "\n\n".join(formatted_parts)

@@ -427,11 +427,26 @@ async def agent_run(
     kb_had_content = False
     other_tool_content = False
     _asks_fulltext = any(k in user_message for k in ("全文", "完整原文", "整篇", "整段", "原文"))
+    # 索要全文时，用去掉"全文/原文"等词的规范化查询检索（避免"全文"把检索带偏）
+    _search_query = user_message
+    if _asks_fulltext:
+        for _w in ("的全文", "完整原文", "整篇原文", "整段原文", "全文", "原文"):
+            _search_query = _search_query.replace(_w, "")
+        _search_query = _search_query.lstrip("请给我帮让把").rstrip("的").strip()
     # 预检索：不依赖模型工具调用，先把知识库结果注入上下文
     try:
-        _ctx = await _execute_tool("knowledge_search", {"query": user_message, "domain": "company"})
+        if _asks_fulltext:
+            from ai_rag.services.rag_service import knowledge_search_handler
+            _ctx = await knowledge_search_handler(
+                query=_search_query, domain="company",
+                max_chunks=15, chunk_chars=800, sort_by_chunk_index=True)
+        else:
+            _ctx = await _execute_tool("knowledge_search", {"query": _search_query, "domain": "company"})
         _has_company = bool(_ctx and _ctx.strip() and "检索失败" not in _ctx
                             and _ctx != "No relevant information found in knowledge base.")
+        # 索要全文时：必须确认检索内容确实包含该作品（否则视为未收录，防止模型从记忆编造）
+        if _has_company and _asks_fulltext and _search_query and _search_query not in _ctx:
+            _has_company = False
         if _has_company:
             system_content += ("\n\n【企业知识域检索结果】以下内容可能包含与用户问题相关的信息：\n" + _ctx + "\n（若上述内容与问题无关，请忽略；若相关，请严格依据其回答并标注来源编号）")
             kb_had_content = True
@@ -440,9 +455,16 @@ async def agent_run(
             logger.info("[RAG] 企业域预检索注入 | len=%d | user=%s", len(_ctx), user_id)
         else:
             # 企业域无结果 → 回退检索个人学习/面试资料域
-            _pctx = await _execute_tool("knowledge_search", {"query": user_message, "domain": "personal"})
+            if _asks_fulltext:
+                _pctx = await knowledge_search_handler(
+                    query=_search_query, domain="personal",
+                    max_chunks=15, chunk_chars=800, sort_by_chunk_index=True)
+            else:
+                _pctx = await _execute_tool("knowledge_search", {"query": _search_query, "domain": "personal"})
             _has_personal = bool(_pctx and _pctx.strip() and "检索失败" not in _pctx
                                  and _pctx != "No relevant information found in knowledge base.")
+            if _has_personal and _asks_fulltext and _search_query and _search_query not in _pctx:
+                _has_personal = False
             if _has_personal:
                 system_content += ("\n\n【个人学习域检索结果】以下为个人学习/面试资料，可能包含与用户问题相关的信息：\n" + _pctx + "\n（若与问题相关，请依据其回答并标注来源编号）")
                 kb_had_content = True
