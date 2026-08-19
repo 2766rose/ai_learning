@@ -83,7 +83,8 @@ SYSTEM_PROMPT = f"""你是企业知识库助手，严格遵守以下规则：
 3. 仅当 knowledge_search 返回空结果且无其他适用工具时，才回复："抱歉，知识库中未找到与您问题相关的信息。"
 4. 不要向用户提及工具名称、检索过程等内部实现细节。
 5. 金额、天数、比例、日期等所有具体数字必须逐字来自检索内容，严禁自行编造或推算；检索内容未覆盖的细节，明确回答"知识库中未找到相关信息"。
-6. 若检索结果中存在与问题相关的信息（包括部分相关），必须依据它回答并标注来源，不要因内容不完整或表述不同而拒绝回答。当检索结果为空或与问题完全无关时：公司制度/业务/参数/内部数据类问题，回答“抱歉，知识库中未找到与您问题相关的信息。”；常识/通识类问题（文学、历史、地理、科学、日常知识等），可依据自身知识简要回答，但严禁编造公司内部信息。"""
+6. 若检索结果中存在与问题相关的信息（包括部分相关），必须依据它回答并标注来源，不要因内容不完整或表述不同而拒绝回答。当检索结果为空或与问题完全无关时：公司制度/业务/参数/内部数据类问题，回答“抱歉，知识库中未找到与您问题相关的信息。”；常识/通识类问题（文学、历史、地理、科学、日常知识等），可依据自身知识简要回答，但严禁编造公司内部信息。
+7. 常识/通识类问题的回答要简短准确，只陈述确定的事实；严禁编造大段原文（如古文全文、长篇文章、整段代码等）。若用户需要完整原文而知识库未收录，应简要介绍其要点，并说明无法提供全文。"""
 
 # 全局 HTTP 客户端（复用连接池）
 _http_client = httpx.AsyncClient(
@@ -252,6 +253,7 @@ async def _stream_tool_loop(
     tool_trace: Optional[List[Dict[str, Any]]] = None,
     kb_had_content: bool = False,
     query: str = "",
+    asks_fulltext: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
     全流式 Tool Calling 循环（基于 Ollama 原生 /api/chat）。
@@ -366,6 +368,9 @@ async def _stream_tool_loop(
             if should_refuse(_full, _kb_had, _other_had, query=query):
                 logger.warning("[Stream] hallucination guard | session=%s | len=%d", session_id, len(_full))
                 _full = REFUSAL_MESSAGE
+            if asks_fulltext and not _kb_had and len(_full) > 200 and "无法提供" not in _full and "未收录" not in _full:
+                logger.warning("[Stream] fulltext refusal | session=%s | len=%d", session_id, len(_full))
+                _full = "抱歉，知识库未收录该作品的完整原文，无法提供全文。"
             if _full:
                 yield _full
         return
@@ -421,6 +426,7 @@ async def agent_run(
     retrieved_chunks: List[str] = []
     kb_had_content = False
     other_tool_content = False
+    _asks_fulltext = any(k in user_message for k in ("全文", "完整原文", "整篇", "整段", "原文"))
     # 预检索：不依赖模型工具调用，先把知识库结果注入上下文
     try:
         _ctx = await _execute_tool("knowledge_search", {"query": user_message, "domain": "company"})
@@ -447,7 +453,10 @@ async def agent_run(
                 if any(k in user_message for k in COMPANY_HINT):
                     system_content += "\n\n【知识库检索结果】知识库中未找到与您问题相关的信息。"
                 else:
-                    system_content += "\n\n【知识库检索结果】知识库中未检索到相关内容；常识/通识类问题可依据自身知识回答，但涉及公司内部信息时不得编造。"
+                    if _asks_fulltext:
+                        system_content += "\n\n【知识库检索结果】知识库未收录该作品的原文。用户索要全文/完整原文时：必须明确说明无法提供全文，只可简要介绍背景与要点（不超过100字），严禁输出任何原文句子。"
+                    else:
+                        system_content += "\n\n【知识库检索结果】知识库中未检索到相关内容；常识/通识类问题可依据自身知识回答，但涉及公司内部信息时不得编造。"
     except Exception as e:
         logger.warning("[RAG] 知识库预检索失败 | user=%s | error=%s", user_id, e)
 
@@ -463,7 +472,7 @@ async def agent_run(
 
     # 3. 路由至流式或非流式处理
     if stream:
-        return _stream_tool_loop(messages, session_id, user_id=user_id, tool_trace=tool_trace, kb_had_content=kb_had_content, query=user_message)
+        return _stream_tool_loop(messages, session_id, user_id=user_id, tool_trace=tool_trace, kb_had_content=kb_had_content, query=user_message, asks_fulltext=_asks_fulltext)
 
     # ====== 非流式模式 ======
 
@@ -514,6 +523,9 @@ async def agent_run(
             if should_refuse(final_content, kb_had_content, other_tool_content, query=user_message):
                 logger.warning("[Agent] hallucination guard | session=%s | len=%d", session_id, len(final_content))
                 final_content = REFUSAL_MESSAGE
+            if _asks_fulltext and not kb_had_content and len(final_content) > 200 and "无法提供" not in final_content and "未收录" not in final_content:
+                logger.warning("[Agent] fulltext refusal | session=%s | len=%d", session_id, len(final_content))
+                final_content = "抱歉，知识库未收录该作品的完整原文，无法提供全文。"
             retrieved_knowledge = "\n\n---\n\n".join(retrieved_chunks) if retrieved_chunks else ""
             return final_content, retrieved_knowledge
 
