@@ -230,18 +230,6 @@ async def _execute_tool(tool_name: str, arguments: Dict[str, Any], user_id: Opti
         return json.dumps({"error": f"Tool execution failed: {str(e)}"}, ensure_ascii=False)
 
 
-def _build_initial_messages(system_content: str, user_message: str) -> List[Dict[str, Any]]:
-    """
-    构建初始消息列表。
-    思考模式已通过 Ollama 顶层参数 think=false 关闭，无需再追加 /no_think 文本
-    （该文本在旧实现里只是普通文字，无法真正关闭思考）。
-    """
-    return [
-        {"role": "system", "content": system_content},
-        {"role": "user", "content": user_message},
-    ]
-
-
 # -----------------------------------------------------------------------------
 # 核心调度逻辑
 # -----------------------------------------------------------------------------
