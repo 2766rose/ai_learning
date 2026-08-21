@@ -30,9 +30,19 @@ class RAGConfig(BaseSettings):
     CHROMA_COLLECTION_NAME: str = "knowledge_base"
     CHROMA_VECTOR_SPACE: str = "cosine"
     # Chunking (moved from root config.py)
-    CHUNK_SIZE: int = 500
+    CHUNK_SIZE: int = 300  # 与 ETL 实际使用一致
     CHUNK_OVERLAP: int = 50
     TOP_K: int = 5
+
+    # 检索质量参数（评估实测调优，可用 RAG_ 前缀环境变量覆盖）
+    MIN_SIMILARITY: float = 0.30
+    RERANK_MIN_SCORE: float = 0.20
+    VEC_GATE_SCORE: float = 0.55
+    MAX_CHUNK_CHARS: int = 450
+    MAX_FORMATTED_CHUNKS: int = 3
+    # Agent 参数
+    MAX_AGENT_ITERATIONS: int = 5
+    HISTORY_TOKEN_BUDGET: int = 3000
 
     # ✅ 新增：长期记忆专用 ChromaDB 配置（与 RAG 知识库物理隔离）
     MEMORY_CHROMA_PERSIST_DIR: str = str(PROJECT_ROOT / "data" / "memory_db")

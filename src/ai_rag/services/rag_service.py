@@ -5,6 +5,7 @@ import logging
 import os
 from typing import Optional, List, Dict, Any
 
+from ai_rag.core.config import rag_config
 from ai_rag.core.vector_store import vector_store
 
 logger = logging.getLogger(__name__)
@@ -22,12 +23,7 @@ def _similarity(h: Dict[str, Any]) -> float:
 # - MIN_SIMILARITY: vector-sim floor. text2vec long mixed chunks score ~0.30-0.55;
 #   0.35 dropped the 'work hours' chunk (0.333) -> lowered to 0.30.
 # - RERANK_MIN_SCORE: rerank logit below this => no relevant info (anti-hallucination gate).
-MIN_SIMILARITY = 0.30
-RERANK_MIN_SCORE = 0.20
-VEC_GATE_SCORE = 0.55  # 重排分低时的向量相似度附加门槛（双信号才拦截）
-# 2026-08-14：控制工具返回体量（3 块 × 300 字），避免检索结果过大导致上下文裁剪塌缩/循环
-MAX_CHUNK_CHARS = 450
-MAX_FORMATTED_CHUNKS = 3
+# 检索/生成质量参数定义在 core/config.py（可用 RAG_ 前缀环境变量覆盖）
 NO_RESULT_MSG = "No relevant information found in knowledge base."
 
 
@@ -35,8 +31,8 @@ async def knowledge_search_handler(
     query: str,
     session_id: Optional[str] = None,
     domain: str = "company",
-    max_chunks: int = MAX_FORMATTED_CHUNKS,
-    chunk_chars: int = MAX_CHUNK_CHARS,
+    max_chunks: int = rag_config.MAX_FORMATTED_CHUNKS,
+    chunk_chars: int = rag_config.MAX_CHUNK_CHARS,
     sort_by_chunk_index: bool = False,
 ) -> str:
     """
@@ -67,7 +63,7 @@ async def knowledge_search_handler(
         # 🔍 诊断日志：打印每条原始结果的相似度，用于排查阈值问题
         for i, h in enumerate(hits):
             sim = _similarity(h)
-            passed = sim >= MIN_SIMILARITY
+            passed = sim >= rag_config.MIN_SIMILARITY
             logger.debug(
                 "Raw hit %d | similarity=%.4f | passed=%s | preview='%s'",
                 i, sim, passed, h.get("document", "")[:30].replace("\n", " ")
@@ -79,7 +75,7 @@ async def knowledge_search_handler(
             _top_score = float(hits[0].get("score", 0.0))
             _top_sim = float(hits[0].get("similarity", 0.0))
             # 双信号门槛：仅当重排分和向量相似度都低时才视为无相关信息（避免误杀像保密这类重排分低但向量相似度高的真问题）
-            if _top_score < RERANK_MIN_SCORE and _top_sim < VEC_GATE_SCORE:
+            if _top_score < rag_config.RERANK_MIN_SCORE and _top_sim < rag_config.VEC_GATE_SCORE:
                 logger.info("No relevant info (rerank=%.4f vec=%.3f) | query=%s", _top_score, _top_sim, query[:60])
                 return NO_RESULT_MSG
 
@@ -89,7 +85,7 @@ async def knowledge_search_handler(
         else:
             filtered_hits = [
                 h for h in hits
-                if _similarity(h) >= MIN_SIMILARITY
+                if _similarity(h) >= rag_config.MIN_SIMILARITY
             ]
         # 知识域过滤：按元数据 domain 分离企业与个人知识（默认 company）
         if domain and domain != "all":
@@ -102,7 +98,7 @@ async def knowledge_search_handler(
         if not filtered_hits:
             logger.info(
                 "ℹ️ All %d hits below threshold (%.2f), returning empty context | query='%s'",
-                len(hits), MIN_SIMILARITY, query[:80]
+                len(hits), rag_config.MIN_SIMILARITY, query[:80]
             )
             return ""
 

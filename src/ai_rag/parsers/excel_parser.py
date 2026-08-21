@@ -1,5 +1,4 @@
 import logging
-from typing import Optional
 import openpyxl
 
 logger = logging.getLogger(__name__)

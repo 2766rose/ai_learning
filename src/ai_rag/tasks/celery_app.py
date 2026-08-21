@@ -1,5 +1,4 @@
 # celery_app.py
-import os
 from celery import Celery
 from celery.signals import setup_logging, worker_process_init, worker_ready
 from kombu import Queue, Exchange
@@ -76,8 +75,7 @@ def on_worker_ready(**kwargs):
     print(f"📋 Registered Tasks: {list(celery_app.tasks.keys())}", flush=True)
     print("=" * 60, flush=True)
     try:
-        from ai_rag.services.etl_service import ingest_document
-        print("✅ etl_service 导入成功", flush=True)
+                print("✅ etl_service 导入成功", flush=True)
     except Exception as e:
         print(f"❌ etl_service 导入失败: {e}", flush=True)
         import traceback

@@ -6,7 +6,6 @@ import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
-import redis
 from fastapi import APIRouter, Request, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 from celery.result import AsyncResult

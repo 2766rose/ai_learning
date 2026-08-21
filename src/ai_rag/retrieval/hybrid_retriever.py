@@ -5,7 +5,7 @@ Enterprise-grade Hybrid Retriever with RRF fusion and strict typing.
 from __future__ import annotations
 
 import logging
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any
 
 # 【关键】统一契约导入，消除裸 Dict
 from ai_rag.retrieval.types import RetrievedDoc

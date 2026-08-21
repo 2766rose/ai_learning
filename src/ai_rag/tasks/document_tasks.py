@@ -1,11 +1,10 @@
 # src/ai_rag/tasks/document_tasks.py
 import asyncio
 import os
-import logging
 from pathlib import Path
 
 from celery.utils.log import get_task_logger
-from celery.exceptions import SoftTimeLimitExceeded, Retry
+from celery.exceptions import SoftTimeLimitExceeded
 from ai_rag.tasks.celery_app import celery_app
 from ai_rag.core.config import rag_config
 from ai_rag.services.etl_service import ingest_document

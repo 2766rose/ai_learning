@@ -19,7 +19,7 @@ from ai_rag.core.config import rag_config
 from ai_rag.agent.tools import TOOL_REGISTRY_MAP, TOOL_SCHEMAS
 from ai_rag.agent.memory import retrieve_memories
 from ai_rag.utils.context_trimmer import trim_messages, ENCODER
-from ai_rag.core.observability import observe, start_observation, end_observation, safe_usage_update, safe_update_output
+from ai_rag.core.observability import start_observation, end_observation, safe_usage_update
 from ai_rag.core.circuit_breaker import llm_circuit_breaker
 from ai_rag.core.answer_guard import should_refuse, REFUSAL_MESSAGE, COMPANY_HINT
 
@@ -41,13 +41,13 @@ def _should_disable_thinking(model_name: str) -> bool:
     return any(k in name for k in _THINKING_MODEL_KEYWORDS)
 
 
-MAX_AGENT_ITERATIONS = 5  # 最大工具调用轮次，防止死循环
 MAX_HISTORY_MESSAGES = 20  # 多轮对话：最多保留最近 20 条历史消息
-HISTORY_TOKEN_BUDGET = 3000  # 多轮对话：历史消息的 token 预算（超出则从最旧开始丢弃）
 
 
-def _trim_history(history, budget=HISTORY_TOKEN_BUDGET):
+def _trim_history(history, budget=None):
     """Keep recent history within token budget (drop oldest first)."""
+    if budget is None:
+        budget = rag_config.HISTORY_TOKEN_BUDGET
     kept, used = [], 0
     for h in reversed(history):
         cost = len(ENCODER.encode(str(h.get("content", "")))) + 4
@@ -237,7 +237,7 @@ async def _stream_tool_loop(
     messages: List[Dict[str, Any]],
     session_id: str,
     user_id: Optional[str] = None,
-    max_iterations: int = MAX_AGENT_ITERATIONS,
+    max_iterations: int = rag_config.MAX_AGENT_ITERATIONS,
     tool_trace: Optional[List[Dict[str, Any]]] = None,
     kb_had_content: bool = False,
     query: str = "",
@@ -486,7 +486,7 @@ async def agent_run(
 
     # ====== 非流式模式 ======
 
-    for iteration in range(MAX_AGENT_ITERATIONS):
+    for iteration in range(rag_config.MAX_AGENT_ITERATIONS):
         tool_calls = None
         collected_content = ""
         if not llm_circuit_breaker.allow():
