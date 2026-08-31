@@ -87,7 +87,12 @@ async def extract_memories(conversation: List[Dict[str, Any]]) -> List[str]:
         if content.startswith("```"):
             content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
-        facts = json.loads(content)
+        if not content:
+            return []
+        try:
+            facts = json.loads(content)
+        except ValueError:
+            return []
         if not isinstance(facts, list):
             facts = []
 

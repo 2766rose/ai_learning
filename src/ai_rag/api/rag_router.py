@@ -48,6 +48,9 @@ async def _auto_save_memories(user_id: str, user_message: str, answer: str) -> N
     """Background auto-extraction: save durable user facts after each turn (non-blocking)."""
     if not user_id or not answer:
         return
+    # 只在用户话语含个人标记（我/俺/本人）时才可能有可提取的个人事实；否则跳过，省掉无谓的 LLM 调用
+    if not any(k in user_message for k in ("我", "俺", "本人")):
+        return
     try:
         from ai_rag.agent.memory import extract_memories, save_memories_with_dedup
         facts = await extract_memories([
