@@ -14,6 +14,7 @@ sentence-transformers==5.6.0
 torch>=2.0,<3.0
 chromadb==1.5.9
 langchain-text-splitters==1.1.2
+langgraph==1.2.11
 unstructured==0.24.1
 structlog==26.1.0
 pymupdf==1.28.2

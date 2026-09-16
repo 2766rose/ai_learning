@@ -41,6 +41,7 @@ class RAGConfig(BaseSettings):
     MAX_CHUNK_CHARS: int = 450
     MAX_FORMATTED_CHUNKS: int = 3
     # Agent 参数
+    AGENT_BACKEND: str = "builtin"  # builtin=自研 ReAct 循环 | langgraph=LangGraph 编排
     MAX_AGENT_ITERATIONS: int = 5
     HISTORY_TOKEN_BUDGET: int = 3000
 
