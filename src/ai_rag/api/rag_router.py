@@ -12,7 +12,14 @@ from celery.result import AsyncResult
 
 from ai_rag.tasks.celery_app import celery_app
 from ai_rag.models.schemas import ChatRequest, ChatResponse, UploadResponse
-from ai_rag.agent.runner import agent_run, get_available_tools
+from ai_rag.agent.runner import get_available_tools
+
+# Agent 编排后端可切换：RAG_AGENT_BACKEND=builtin | langgraph
+from ai_rag.core.config import rag_config as _agent_cfg
+if _agent_cfg.AGENT_BACKEND == "langgraph":
+    from ai_rag.agent.runner_langgraph import agent_run  # type: ignore
+else:
+    from ai_rag.agent.runner import agent_run  # type: ignore
 from ai_rag.core.observability import observe, start_observation, end_observation, safe_update_output
 from ai_rag.core.semantic_cache import semantic_cache
 from ai_rag.core.rate_limiter import rate_limiter
