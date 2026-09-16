@@ -93,8 +93,8 @@ flowchart LR
 
 | 指标 | 说明 | 结果 |
 | --- | --- | --- |
-| RAGAS faithfulness | RAG 回答忠实度 | **0.88** |
-| answer_correctness（自定义评判） | RAG 回答正确性 | **0.84** |
+| RAGAS faithfulness | RAG 回答忠实度 | **0.86** |
+| answer_correctness（自定义评判） | RAG 回答正确性 | **0.85** |
 | 稳定性 | 50 题评估 | **50/50 零崩溃** |
 | 陷阱题拒答 | 5 条知识库外问题 | **5/5 正确拒答** |
 | 语义缓存 | 重复问答耗时 | 10s → **0.06s** |
@@ -168,7 +168,7 @@ ai_learning/
 - 评估集：`data/staff_qa_eval_50.json`（50 条带标准答案，覆盖 6 类文档 + 5 条知识库外陷阱题，由 `scripts/build_eval50.py` 生成）
 - 指标：answer_correctness（LLM 评判）+ faithfulness（RAGAS）
 - 运行：`python scripts/eval_ragas.py`（可设 `RAGAS_SKIP_FT=1` 跳过微调模型对比）
-- 当前基线：correctness ≈ 0.84，faithfulness ≈ 0.88，50/50 零崩溃，5/5 陷阱题正确拒答
+- 当前基线：correctness ≈ 0.85，faithfulness ≈ 0.86，50/50 零崩溃，5/5 陷阱题正确拒答
 
 ### 检索诊断
 
