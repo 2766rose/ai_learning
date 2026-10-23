@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 """Agent Runner unit tests (current code: Ollama /api/chat, dict tool calls)."""
 from ai_rag.agent.runner import (
+    SYSTEM_PROMPT,
     get_available_tools,
     _normalize_tool_calls,
     _build_assistant_tool_message,
     _trim_history,
     _should_disable_thinking,
+    _is_realtime_tool_query,
+    _ensure_weather_evidence,
 )
 
 
@@ -63,3 +66,39 @@ class TestGetAvailableTools:
     def test_contains_knowledge_search(self):
         names = [t["name"] for t in get_available_tools()]
         assert "knowledge_search" in names
+
+
+class TestRealtimeToolRouting:
+    def test_weather_clothing_query_skips_kb(self):
+        assert _is_realtime_tool_query("北京现在适合穿什么衣服？") is True
+
+    def test_weather_umbrella_query_skips_kb(self):
+        assert _is_realtime_tool_query("上海今天需要带伞吗？") is True
+
+    def test_time_query_skips_kb(self):
+        assert _is_realtime_tool_query("现在几点了？") is True
+
+    def test_company_policy_query_keeps_kb(self):
+        assert _is_realtime_tool_query("公司高温天气考勤制度是什么？") is False
+
+    def test_ordinary_query_keeps_kb(self):
+        assert _is_realtime_tool_query("红楼梦的作者是谁？") is False
+
+    def test_weather_prompt_requires_specific_metrics(self):
+        assert "当前温度" in SYSTEM_PROMPT
+        assert "体感温度" in SYSTEM_PROMPT
+        assert "最高/最低温度" in SYSTEM_PROMPT
+
+
+class TestWeatherEvidence:
+    def test_adds_facts_when_answer_has_no_units(self):
+        evidence = "北京当前天气：晴，气温 8°C（体感 6°C），今日 3°C ~ 15°C。"
+        answer = "北京气温较低，建议穿外套。"
+        result = _ensure_weather_evidence(answer, evidence)
+        assert "8°C" in result
+        assert "建议穿外套" in result
+
+    def test_keeps_answer_when_metrics_already_present(self):
+        evidence = "北京当前天气：晴，气温 8°C。"
+        answer = "北京当前 8°C，建议穿外套。"
+        assert _ensure_weather_evidence(answer, evidence) == answer

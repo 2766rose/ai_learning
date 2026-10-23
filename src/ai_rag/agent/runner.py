@@ -11,6 +11,7 @@ v2（2026-08-14）：
 
 import json
 import logging
+import re
 from typing import AsyncGenerator, Union, List, Dict, Any, Tuple, Optional
 
 import httpx
@@ -58,12 +59,45 @@ def _trim_history(history, budget=None):
     return kept
 MEMORY_INJECTION_MARKER = "📌 以下为检索到的用户记忆"
 
+
+# 实时工具意图：明显的天气/时间问题不必先做知识库预检索。
+_REALTIME_WEATHER_HINTS = (
+    "天气", "气温", "温度", "下雨", "降雨", "风力",
+    "冷不冷", "热不热", "冷吗", "热吗", "穿什么", "穿啥",
+    "穿衣", "带伞", "多少度",
+)
+_REALTIME_TIME_HINTS = (
+    "几点", "现在时间", "当前时间", "今天几号", "几号", "星期几", "周几",
+)
+
+
+def _is_realtime_tool_query(query: str) -> bool:
+    """Return True for standalone weather/time queries that should skip KB prefetch."""
+    q = (query or "").strip()
+    if not q:
+        return False
+    # 公司制度、业务参数等仍然必须走知识库检索。
+    if any(k in q for k in COMPANY_HINT):
+        return False
+    return any(k in q for k in _REALTIME_WEATHER_HINTS + _REALTIME_TIME_HINTS)
+
+
+def _ensure_weather_evidence(answer: str, evidence: str) -> str:
+    """Prepend concrete weather facts when the model omitted the requested metrics."""
+    text = (answer or "").strip()
+    facts = (evidence or "").strip()
+    if not facts:
+        return text
+    if re.search(r"[°℃]", text):
+        return text
+    return (facts + ("\n\n" + text if text else "")).strip()
+
 SYSTEM_PROMPT = f"""你是企业知识库助手，严格遵守以下规则：
 
 【工具选择原则】
 按以下优先级判断，命中即执行，不再继续向下匹配：
 1. 时间/日期/当前时刻 → get_current_time
-2. 天气/气温/降雨/风力等 → get_weather
+2. 天气/气温/降雨/风力/穿衣/冷不冷/热不热/是否需要带伞 → get_weather
 3. 企业内部知识/文档/业务规范/产品手册 → knowledge_search(domain="company")；个人学习、面试笔记等私人资料 → knowledge_search(domain="personal")；不确定时默认 company
 4. 当用户自我介绍、告知姓名/偏好/职业/身份等个人稳定信息时，必须调用 save_user_memory 保存 → save_user_memory
 5. 以上均不适用 → 直接基于对话上下文回答，不调用任何工具
@@ -84,7 +118,8 @@ SYSTEM_PROMPT = f"""你是企业知识库助手，严格遵守以下规则：
 4. 不要向用户提及工具名称、检索过程等内部实现细节。
 5. 金额、天数、比例、日期等所有具体数字必须逐字来自检索内容，严禁自行编造或推算；检索内容未覆盖的细节，明确回答"知识库中未找到相关信息"。
 6. 若检索结果中存在与问题相关的信息（包括部分相关），必须依据它回答并标注来源，不要因内容不完整或表述不同而拒绝回答。当检索结果为空或与问题完全无关时：公司制度/业务/参数/内部数据类问题，回答“抱歉，知识库中未找到与您问题相关的信息。”；常识/通识类问题（文学、历史、地理、科学、日常知识等），可依据自身知识简要回答，但严禁编造公司内部信息。
-7. 常识/通识类问题的回答要简短准确，只陈述确定的事实；严禁编造大段原文（如古文全文、长篇文章、整段代码等）。若用户需要完整原文而知识库未收录，应简要介绍其要点，并说明无法提供全文。"""
+7. 常识/通识类问题的回答要简短准确，只陈述确定的事实；严禁编造大段原文（如古文全文、长篇文章、整段代码等）。若用户需要完整原文而知识库未收录，应简要介绍其要点，并说明无法提供全文。
+8. 调用 get_weather 后，最终回答必须包含当前天气、当前温度、体感温度和今日最高/最低温度，再给出穿衣建议；不得只写“气温较低”而省略具体数值。"""
 
 # 全局 HTTP 客户端（复用连接池）
 _http_client = httpx.AsyncClient(
@@ -252,6 +287,7 @@ async def _stream_tool_loop(
     _other_had = False
     _buffer: List[str] = []
     _buffering = not _kb_had  # no KB info yet -> hold output until proven safe
+    _weather_evidence = ""
 
     for iteration in range(max_iterations):
         collected_content = ""
@@ -321,6 +357,10 @@ async def _stream_tool_loop(
                     session_id, iteration, tc["name"],
                 )
                 result = await _execute_tool(tc["name"], tc["arguments"], user_id=user_id)
+
+                if tc["name"] == "get_weather" and result and "查询失败" not in result:
+                    _weather_evidence = result
+
                 if tc["name"] == "knowledge_search":
                     if result and result != "No relevant information found in knowledge base." and "检索失败" not in result:
                         _kb_had = True
@@ -360,7 +400,10 @@ async def _stream_tool_loop(
                 logger.warning("[Stream] fulltext refusal | session=%s | len=%d", session_id, len(_full))
                 _full = "抱歉，知识库未收录该作品的完整原文，无法提供全文。"
             if _full:
+                _full = _ensure_weather_evidence(_full, _weather_evidence)
                 yield _full
+        elif _weather_evidence and not re.search(r"[°℃]", collected_content):
+            yield "\n\n" + _weather_evidence
         return
 
     logger.warning("⚠️ [Stream] 达到最大推理轮次 | session=%s", session_id)
@@ -421,54 +464,61 @@ async def agent_run(
         for _w in ("的全文", "完整原文", "整篇原文", "整段原文", "全文", "原文"):
             _search_query = _search_query.replace(_w, "")
         _search_query = _search_query.lstrip("请给我帮让把").rstrip("的").strip()
-    # 预检索：不依赖模型工具调用，先把知识库结果注入上下文
-    try:
-        if _asks_fulltext:
-            from ai_rag.services.rag_service import knowledge_search_handler
-            _ctx = await knowledge_search_handler(
-                query=_search_query, domain="company",
-                max_chunks=15, chunk_chars=800, sort_by_chunk_index=True)
-        else:
-            _ctx = await _execute_tool("knowledge_search", {"query": _search_query, "domain": "company"})
-        _has_company = bool(_ctx and _ctx.strip() and "检索失败" not in _ctx
-                            and _ctx != "No relevant information found in knowledge base.")
-        # 索要全文时：必须确认检索内容确实包含该作品（否则视为未收录，防止模型从记忆编造）
-        if _has_company and _asks_fulltext and _search_query and _search_query not in _ctx:
-            _has_company = False
-        if _has_company:
-            system_content += ("\n\n【企业知识域检索结果】以下内容可能包含与用户问题相关的信息：\n" + _ctx + "\n（若上述内容与问题无关，请忽略；若相关，请严格依据其回答并标注来源编号）")
-            kb_had_content = True
-            if _ctx not in retrieved_chunks:
-                retrieved_chunks.append(_ctx)
-            logger.info("[RAG] 企业域预检索注入 | len=%d | user=%s", len(_ctx), user_id)
-        else:
-            # 企业域无结果 → 回退检索个人学习/面试资料域
+    _skip_kb_prefetch = _is_realtime_tool_query(user_message)
+    if _skip_kb_prefetch:
+        system_content += (
+            "\n\n【实时工具路由】当前问题属于天气或时间类问题，"
+            "请优先调用对应工具，不要使用知识库内容猜测。"
+        )
+    else:
+        # 预检索：不依赖模型工具调用，先把知识库结果注入上下文
+        try:
             if _asks_fulltext:
-                _pctx = await knowledge_search_handler(
-                    query=_search_query, domain="personal",
+                from ai_rag.services.rag_service import knowledge_search_handler
+                _ctx = await knowledge_search_handler(
+                    query=_search_query, domain="company",
                     max_chunks=15, chunk_chars=800, sort_by_chunk_index=True)
             else:
-                _pctx = await _execute_tool("knowledge_search", {"query": _search_query, "domain": "personal"})
-            _has_personal = bool(_pctx and _pctx.strip() and "检索失败" not in _pctx
-                                 and _pctx != "No relevant information found in knowledge base.")
-            if _has_personal and _asks_fulltext and _search_query and _search_query not in _pctx:
-                _has_personal = False
-            if _has_personal:
-                system_content += ("\n\n【个人学习域检索结果】以下为个人学习/面试资料，可能包含与用户问题相关的信息：\n" + _pctx + "\n（若与问题相关，请依据其回答并标注来源编号）")
+                _ctx = await _execute_tool("knowledge_search", {"query": _search_query, "domain": "company"})
+            _has_company = bool(_ctx and _ctx.strip() and "检索失败" not in _ctx
+                                and _ctx != "No relevant information found in knowledge base.")
+            # 索要全文时：必须确认检索内容确实包含该作品（否则视为未收录，防止模型从记忆编造）
+            if _has_company and _asks_fulltext and _search_query and _search_query not in _ctx:
+                _has_company = False
+            if _has_company:
+                system_content += ("\n\n【企业知识域检索结果】以下内容可能包含与用户问题相关的信息：\n" + _ctx + "\n（若上述内容与问题无关，请忽略；若相关，请严格依据其回答并标注来源编号）")
                 kb_had_content = True
-                if _pctx not in retrieved_chunks:
-                    retrieved_chunks.append(_pctx)
-                logger.info("[RAG] 个人域预检索注入 | len=%d | user=%s", len(_pctx), user_id)
+                if _ctx not in retrieved_chunks:
+                    retrieved_chunks.append(_ctx)
+                logger.info("[RAG] 企业域预检索注入 | len=%d | user=%s", len(_ctx), user_id)
             else:
-                if any(k in user_message for k in COMPANY_HINT):
-                    system_content += "\n\n【知识库检索结果】知识库中未找到与您问题相关的信息。"
+                # 企业域无结果 → 回退检索个人学习/面试资料域
+                if _asks_fulltext:
+                    _pctx = await knowledge_search_handler(
+                        query=_search_query, domain="personal",
+                        max_chunks=15, chunk_chars=800, sort_by_chunk_index=True)
                 else:
-                    if _asks_fulltext:
-                        system_content += "\n\n【知识库检索结果】知识库未收录该作品的原文。用户索要全文/完整原文时：必须明确说明无法提供全文，只可简要介绍背景与要点（不超过100字），严禁输出任何原文句子。"
+                    _pctx = await _execute_tool("knowledge_search", {"query": _search_query, "domain": "personal"})
+                _has_personal = bool(_pctx and _pctx.strip() and "检索失败" not in _pctx
+                                     and _pctx != "No relevant information found in knowledge base.")
+                if _has_personal and _asks_fulltext and _search_query and _search_query not in _pctx:
+                    _has_personal = False
+                if _has_personal:
+                    system_content += ("\n\n【个人学习域检索结果】以下为个人学习/面试资料，可能包含与用户问题相关的信息：\n" + _pctx + "\n（若与问题相关，请依据其回答并标注来源编号）")
+                    kb_had_content = True
+                    if _pctx not in retrieved_chunks:
+                        retrieved_chunks.append(_pctx)
+                    logger.info("[RAG] 个人域预检索注入 | len=%d | user=%s", len(_pctx), user_id)
+                else:
+                    if any(k in user_message for k in COMPANY_HINT):
+                        system_content += "\n\n【知识库检索结果】知识库中未找到与您问题相关的信息。"
                     else:
-                        system_content += "\n\n【知识库检索结果】知识库中未检索到相关内容；常识/通识类问题可依据自身知识回答，但涉及公司内部信息时不得编造。"
-    except Exception as e:
-        logger.warning("[RAG] 知识库预检索失败 | user=%s | error=%s", user_id, e)
+                        if _asks_fulltext:
+                            system_content += "\n\n【知识库检索结果】知识库未收录该作品的原文。用户索要全文/完整原文时：必须明确说明无法提供全文，只可简要介绍背景与要点（不超过100字），严禁输出任何原文句子。"
+                        else:
+                            system_content += "\n\n【知识库检索结果】知识库中未检索到相关内容；常识/通识类问题可依据自身知识回答，但涉及公司内部信息时不得编造。"
+        except Exception as e:
+            logger.warning("[RAG] 知识库预检索失败 | user=%s | error=%s", user_id, e)
 
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_content}]
     if history:
@@ -485,6 +535,8 @@ async def agent_run(
         return _stream_tool_loop(messages, session_id, user_id=user_id, tool_trace=tool_trace, kb_had_content=kb_had_content, query=user_message, asks_fulltext=_asks_fulltext)
 
     # ====== 非流式模式 ======
+
+    weather_evidence = ""
 
     for iteration in range(rag_config.MAX_AGENT_ITERATIONS):
         tool_calls = None
@@ -536,6 +588,7 @@ async def agent_run(
             if _asks_fulltext and not kb_had_content and len(final_content) > 200 and "无法提供" not in final_content and "未收录" not in final_content:
                 logger.warning("[Agent] fulltext refusal | session=%s | len=%d", session_id, len(final_content))
                 final_content = "抱歉，知识库未收录该作品的完整原文，无法提供全文。"
+            final_content = _ensure_weather_evidence(final_content, weather_evidence)
             retrieved_knowledge = "\n\n---\n\n".join(retrieved_chunks) if retrieved_chunks else ""
             return final_content, retrieved_knowledge
 
@@ -553,6 +606,9 @@ async def agent_run(
                 session_id, iteration, tc["name"],
             )
             result = await _execute_tool(tc["name"], tc["arguments"], user_id=user_id)
+
+            if tc["name"] == "get_weather" and result and "查询失败" not in result:
+                weather_evidence = result
 
             if tc["name"] == "knowledge_search":
                 if result and result != "No relevant information found in knowledge base." and "检索失败" not in result:

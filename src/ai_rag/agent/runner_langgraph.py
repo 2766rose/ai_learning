@@ -33,6 +33,8 @@ class AgentState(TypedDict, total=False):
     retrieved_chunks: List[str]
     kb_had_content: bool
     final_content: str
+    weather_evidence: str
+    other_tool_content: bool
     user_id: str
 
 
@@ -113,15 +115,21 @@ async def _tools_node(state: AgentState) -> AgentState:
 
     retrieved = list(state.get("retrieved_chunks") or [])
     kb_had = bool(state.get("kb_had_content"))
+    weather_evidence = str(state.get("weather_evidence") or "")
+    other_tool_content = bool(state.get("other_tool_content"))
     user_id = state.get("user_id") or "anonymous"
 
     for call in calls:
         result = await base._execute_tool(call["name"], call["arguments"], user_id=user_id)
+        if call["name"] == "get_weather" and result and "查询失败" not in result:
+            weather_evidence = result
         if call["name"] == "knowledge_search":
             if result and result != NO_RESULT_MSG:
                 kb_had = True
             if result not in retrieved:
                 retrieved.append(result)
+        elif result and result.strip() and "error" not in result.lower():
+            other_tool_content = True
         messages.append({"role": "tool", "content": result, "tool_call_id": call["id"]})
 
     messages = trim_messages(messages, max_tokens=rag_config.LLM_MAX_TOKENS)
@@ -131,6 +139,8 @@ async def _tools_node(state: AgentState) -> AgentState:
         "iterations": int(state.get("iterations") or 0) + 1,
         "retrieved_chunks": retrieved,
         "kb_had_content": kb_had,
+        "weather_evidence": weather_evidence,
+        "other_tool_content": other_tool_content,
     }
 
 
@@ -184,21 +194,28 @@ async def agent_run(
     # ---- 2. 预检索注入（先公司域，无结果回退个人域）----
     retrieved_chunks: List[str] = []
     kb_had_content = False
-    try:
-        from ai_rag.services.rag_service import knowledge_search_handler
-        _ctx = await knowledge_search_handler(query=user_message, domain="company")
-        if _ctx and _ctx.strip() and _ctx != NO_RESULT_MSG:
-            system_content += "\n\n【企业知识域检索结果】\n" + _ctx
-            kb_had_content = True
-            retrieved_chunks.append(_ctx)
-        else:
-            _pctx = await knowledge_search_handler(query=user_message, domain="personal")
-            if _pctx and _pctx.strip() and _pctx != NO_RESULT_MSG:
-                system_content += "\n\n【个人学习域检索结果】\n" + _pctx
+    _skip_kb_prefetch = base._is_realtime_tool_query(user_message)
+    if _skip_kb_prefetch:
+        system_content += (
+            "\n\n【实时工具路由】当前问题属于天气或时间类问题，"
+            "请优先调用对应工具，不要使用知识库内容猜测。"
+        )
+    else:
+        try:
+            from ai_rag.services.rag_service import knowledge_search_handler
+            _ctx = await knowledge_search_handler(query=user_message, domain="company")
+            if _ctx and _ctx.strip() and _ctx != NO_RESULT_MSG:
+                system_content += "\n\n【企业知识域检索结果】\n" + _ctx
                 kb_had_content = True
-                retrieved_chunks.append(_pctx)
-    except Exception as e:
-        logger.warning("[LangGraph] 预检索失败 | error=%s", e)
+                retrieved_chunks.append(_ctx)
+            else:
+                _pctx = await knowledge_search_handler(query=user_message, domain="personal")
+                if _pctx and _pctx.strip() and _pctx != NO_RESULT_MSG:
+                    system_content += "\n\n【个人学习域检索结果】\n" + _pctx
+                    kb_had_content = True
+                    retrieved_chunks.append(_pctx)
+        except Exception as e:
+            logger.warning("[LangGraph] 预检索失败 | error=%s", e)
 
     # ---- 3. 组装消息（含历史裁剪）----
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_content}]
@@ -224,9 +241,15 @@ async def agent_run(
         answer = "达到最大推理轮次，请简化问题重试。"
 
     # ---- 5. 防幻觉兜底（与自研版一致，保证对比公平）----
-    if should_refuse(answer, bool(final_state.get("kb_had_content")), False, query=user_message):
+    if should_refuse(
+        answer,
+        bool(final_state.get("kb_had_content")),
+        bool(final_state.get("other_tool_content")),
+        query=user_message,
+    ):
         logger.warning("[LangGraph] 幻觉兜底拦截 | session=%s", session_id)
         answer = REFUSAL_MESSAGE
+    answer = base._ensure_weather_evidence(answer, final_state.get("weather_evidence") or "")
 
     knowledge = "\n\n---\n\n".join(retrieved_chunks) if retrieved_chunks else ""
 
