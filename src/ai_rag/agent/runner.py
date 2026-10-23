@@ -20,7 +20,12 @@ from ai_rag.core.config import rag_config
 from ai_rag.agent.tools import TOOL_REGISTRY_MAP, TOOL_SCHEMAS
 from ai_rag.agent.memory import retrieve_memories
 from ai_rag.utils.context_trimmer import trim_messages, ENCODER
-from ai_rag.core.observability import start_observation, end_observation, safe_usage_update
+from ai_rag.core.observability import (
+    start_observation,
+    end_observation,
+    safe_usage_update,
+    safe_update_observation,
+)
 from ai_rag.core.circuit_breaker import llm_circuit_breaker
 from ai_rag.core.answer_guard import should_refuse, REFUSAL_MESSAGE, COMPANY_HINT
 
@@ -91,6 +96,34 @@ def _ensure_weather_evidence(answer: str, evidence: str) -> str:
     if re.search(r"[°℃]", text):
         return text
     return (facts + ("\n\n" + text if text else "")).strip()
+
+
+def _normalize_search_query(query: str) -> str:
+    return re.sub(r"[\s\W_]+", "", (query or "").lower())
+
+
+def _should_skip_knowledge_search(
+    arguments: Dict[str, Any],
+    kb_had_content: bool,
+    prefetched_query: str,
+    prefetched_domain: str,
+) -> bool:
+    """Avoid repeating a KB search already performed for this request."""
+    if not kb_had_content or not prefetched_query:
+        return False
+    args = arguments if isinstance(arguments, dict) else {}
+    query = str(args.get("query") or "")
+    domain = str(args.get("domain") or "company")
+    if domain != prefetched_domain:
+        return False
+    current = _normalize_search_query(query)
+    previous = _normalize_search_query(prefetched_query)
+    if not current or not previous:
+        return False
+    if current == previous:
+        return True
+    short, long = sorted((current, previous), key=len)
+    return len(short) >= 2 and short in long
 
 SYSTEM_PROMPT = f"""你是企业知识库助手，严格遵守以下规则：
 
@@ -251,18 +284,33 @@ async def _execute_tool(tool_name: str, arguments: Dict[str, Any], user_id: Opti
         logger.warning("[Tool] 未知工具调用: %s", tool_name)
         return json.dumps({"error": f"Unknown tool: {tool_name}"}, ensure_ascii=False)
 
+    tool_obs = start_observation(
+        "tool_call",
+        "span",
+        input={"tool": tool_name, "args": str(arguments)[:300]},
+    )
     try:
         _tool_cfg = {"configurable": {"user_id": user_id}} if user_id else None
         result = await tool_func.ainvoke(arguments, config=_tool_cfg)
         result_str = str(result)
+        safe_update_observation(
+            tool_obs,
+            output={"ok": True, "result_len": len(result_str)},
+        )
         logger.info(
             "[Tool] 执行成功 | tool=%s | args=%s | result_len=%d",
             tool_name, str(arguments)[:100], len(result_str),
         )
         return result_str
     except Exception as e:
+        safe_update_observation(
+            tool_obs,
+            output={"ok": False, "error": type(e).__name__, "message": str(e)[:300]},
+        )
         logger.exception("[Tool] 执行异常 | tool=%s | args=%s", tool_name, str(arguments))
         return json.dumps({"error": f"Tool execution failed: {str(e)}"}, ensure_ascii=False)
+    finally:
+        end_observation(tool_obs)
 
 
 # -----------------------------------------------------------------------------
@@ -277,6 +325,8 @@ async def _stream_tool_loop(
     kb_had_content: bool = False,
     query: str = "",
     asks_fulltext: bool = False,
+    prefetched_query: str = "",
+    prefetched_domain: str = "",
 ) -> AsyncGenerator[str, None]:
     """
     全流式 Tool Calling 循环（基于 Ollama 原生 /api/chat）。
@@ -356,13 +406,24 @@ async def _stream_tool_loop(
                     "[Stream] 工具调用 | session=%s | iter=%d | tool=%s",
                     session_id, iteration, tc["name"],
                 )
-                result = await _execute_tool(tc["name"], tc["arguments"], user_id=user_id)
+                arguments = tc.get("arguments") or {}
+                skipped_duplicate = (
+                    tc["name"] == "knowledge_search"
+                    and _should_skip_knowledge_search(
+                        arguments, _kb_had, prefetched_query, prefetched_domain
+                    )
+                )
+                if skipped_duplicate:
+                    result = "【已预检索】本轮知识库已经检索完成，请直接使用上方注入的上下文。"
+                    logger.info("[Stream] 跳过重复知识检索 | session=%s | query=%s", session_id, arguments.get("query", "")[:80])
+                else:
+                    result = await _execute_tool(tc["name"], arguments, user_id=user_id)
 
                 if tc["name"] == "get_weather" and result and "查询失败" not in result:
                     _weather_evidence = result
 
                 if tc["name"] == "knowledge_search":
-                    if result and result != "No relevant information found in knowledge base." and "检索失败" not in result:
+                    if not skipped_duplicate and result and result != "No relevant information found in knowledge base." and "检索失败" not in result:
                         _kb_had = True
                 else:
                     if result and result.strip() and "error" not in result.lower():
@@ -457,6 +518,8 @@ async def agent_run(
     retrieved_chunks: List[str] = []
     kb_had_content = False
     other_tool_content = False
+    prefetched_query = ""
+    prefetched_domain = ""
     _asks_fulltext = any(k in user_message for k in ("全文", "完整原文", "整篇", "整段", "原文"))
     # 索要全文时，用去掉"全文/原文"等词的规范化查询检索（避免"全文"把检索带偏）
     _search_query = user_message
@@ -488,6 +551,8 @@ async def agent_run(
             if _has_company:
                 system_content += ("\n\n【企业知识域检索结果】以下内容可能包含与用户问题相关的信息：\n" + _ctx + "\n（若上述内容与问题无关，请忽略；若相关，请严格依据其回答并标注来源编号）")
                 kb_had_content = True
+                prefetched_query = _search_query
+                prefetched_domain = "company"
                 if _ctx not in retrieved_chunks:
                     retrieved_chunks.append(_ctx)
                 logger.info("[RAG] 企业域预检索注入 | len=%d | user=%s", len(_ctx), user_id)
@@ -506,6 +571,8 @@ async def agent_run(
                 if _has_personal:
                     system_content += ("\n\n【个人学习域检索结果】以下为个人学习/面试资料，可能包含与用户问题相关的信息：\n" + _pctx + "\n（若与问题相关，请依据其回答并标注来源编号）")
                     kb_had_content = True
+                    prefetched_query = _search_query
+                    prefetched_domain = "personal"
                     if _pctx not in retrieved_chunks:
                         retrieved_chunks.append(_pctx)
                     logger.info("[RAG] 个人域预检索注入 | len=%d | user=%s", len(_pctx), user_id)
@@ -520,6 +587,12 @@ async def agent_run(
         except Exception as e:
             logger.warning("[RAG] 知识库预检索失败 | user=%s | error=%s", user_id, e)
 
+    if kb_had_content:
+        system_content += (
+            "\n\n【预检索完成】本轮知识库已经检索完成。"
+            "请直接使用上方已注入的上下文；除非需要明显不同的查询，否则不要再次调用 knowledge_search。"
+        )
+
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_content}]
     if history:
         _recent = [
@@ -532,7 +605,12 @@ async def agent_run(
 
     # 3. 路由至流式或非流式处理
     if stream:
-        return _stream_tool_loop(messages, session_id, user_id=user_id, tool_trace=tool_trace, kb_had_content=kb_had_content, query=user_message, asks_fulltext=_asks_fulltext)
+        return _stream_tool_loop(
+            messages, session_id, user_id=user_id, tool_trace=tool_trace,
+            kb_had_content=kb_had_content, query=user_message,
+            asks_fulltext=_asks_fulltext,
+            prefetched_query=prefetched_query, prefetched_domain=prefetched_domain,
+        )
 
     # ====== 非流式模式 ======
 
@@ -605,15 +683,26 @@ async def agent_run(
                 "[Agent] 工具调用 | session=%s | iter=%d | tool=%s",
                 session_id, iteration, tc["name"],
             )
-            result = await _execute_tool(tc["name"], tc["arguments"], user_id=user_id)
+            arguments = tc.get("arguments") or {}
+            skipped_duplicate = (
+                tc["name"] == "knowledge_search"
+                and _should_skip_knowledge_search(
+                    arguments, kb_had_content, prefetched_query, prefetched_domain
+                )
+            )
+            if skipped_duplicate:
+                result = "【已预检索】本轮知识库已经检索完成，请直接使用上方注入的上下文。"
+                logger.info("[Agent] 跳过重复知识检索 | session=%s | query=%s", session_id, arguments.get("query", "")[:80])
+            else:
+                result = await _execute_tool(tc["name"], arguments, user_id=user_id)
 
             if tc["name"] == "get_weather" and result and "查询失败" not in result:
                 weather_evidence = result
 
             if tc["name"] == "knowledge_search":
-                if result and result != "No relevant information found in knowledge base." and "检索失败" not in result:
+                if not skipped_duplicate and result and result != "No relevant information found in knowledge base." and "检索失败" not in result:
                     kb_had_content = True
-                if result not in retrieved_chunks:
+                if not skipped_duplicate and result not in retrieved_chunks:
                     retrieved_chunks.append(result)
             else:
                 if result and result.strip() and "error" not in result.lower():

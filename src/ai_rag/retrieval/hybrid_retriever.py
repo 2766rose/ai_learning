@@ -9,6 +9,7 @@ from typing import List, Tuple, Dict, Any
 
 # 【关键】统一契约导入，消除裸 Dict
 from ai_rag.retrieval.types import RetrievedDoc
+from ai_rag.core.observability import start_observation, end_observation, safe_update_observation
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +37,19 @@ class HybridRetriever:
         vector_docs = self._normalize_vector_results(vector_raw)
 
         # 3. RRF 融合并截断
-        fused = self._rrf_fusion(
-            [bm25_docs, vector_docs],
-            top_k=getattr(self.config, "final_top_k", 10)
+        rrf_obs = start_observation(
+            "rrf_fusion",
+            "span",
+            input={"bm25_candidates": len(bm25_docs), "vector_candidates": len(vector_docs)},
         )
+        try:
+            fused = self._rrf_fusion(
+                [bm25_docs, vector_docs],
+                top_k=getattr(self.config, "final_top_k", 10)
+            )
+            safe_update_observation(rrf_obs, output={"fused_candidates": len(fused)})
+        finally:
+            end_observation(rrf_obs)
 
         logger.info(
             f"Hybrid retrieve completed: query='{query[:30]}...', "
@@ -51,20 +61,52 @@ class HybridRetriever:
     #                       安全召回层（防御性编程）                        #
     # ------------------------------------------------------------------ #
     async def _safe_bm25_search(self, query: str) -> list:
+        obs = start_observation(
+            "bm25_search",
+            "span",
+            input={"query": query[:200], "top_k": self.config.bm25_top_k},
+        )
         try:
-            return self.bm25.search(query, top_k=self.config.bm25_top_k)
+            raw = self.bm25.search(query, top_k=self.config.bm25_top_k)
+            safe_update_observation(
+                obs,
+                output={
+                    "hits": len(raw),
+                    "top_ids": [str(doc.get("id", "")) for doc, _score in raw[:5]],
+                },
+            )
+            return raw
         except Exception as e:
+            safe_update_observation(obs, output={"error": type(e).__name__})
             logger.error(f"BM25 search failed: {e}", exc_info=True)
             return []
+        finally:
+            end_observation(obs)
 
     async def _safe_vector_search(self, query: str) -> list:
+        obs = start_observation(
+            "vector_search",
+            "span",
+            input={"query": query[:200], "top_k": self.config.vector_top_k},
+        )
         try:
-            return await self.vector_store.search(
+            raw = await self.vector_store.search(
                 query=query, top_k=self.config.vector_top_k
             )
+            safe_update_observation(
+                obs,
+                output={
+                    "hits": len(raw),
+                    "top_ids": [str(item.get("id", "")) for item in raw[:5]],
+                },
+            )
+            return raw
         except Exception as e:
+            safe_update_observation(obs, output={"error": type(e).__name__})
             logger.error(f"Vector search failed: {e}", exc_info=True)
             return []
+        finally:
+            end_observation(obs)
 
     # ------------------------------------------------------------------ #
     #              格式标准化层（将异构数据转为 RetrievedDoc）               #

@@ -12,6 +12,7 @@ import os
 import threading
 from pathlib import Path
 from typing import Any, Dict, List
+from ai_rag.core.observability import start_observation, end_observation, safe_update_observation
 
 logger = logging.getLogger(__name__)
 
@@ -51,13 +52,35 @@ class Reranker:
         """对候选片段打分并返回 top_k（保留原 dict，score 字段覆盖为精排分）"""
         if not candidates:
             return []
-        await asyncio.to_thread(self._ensure_loaded)
-        pairs = [(query, c["document"]) for c in candidates]
-        scores = await asyncio.to_thread(self._model.predict, pairs)
-        ranked = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
-        for c, s in ranked:
-            c["score"] = float(s)
-        return [c for c, _ in ranked][:top_k]
+        obs = start_observation(
+            "rerank",
+            "span",
+            input={"query": query[:200], "candidate_count": len(candidates), "top_k": top_k},
+        )
+        try:
+            await asyncio.to_thread(self._ensure_loaded)
+            pairs = [(query, c["document"]) for c in candidates]
+            scores = await asyncio.to_thread(self._model.predict, pairs)
+            ranked = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
+            for c, s in ranked:
+                c["score"] = float(s)
+            result = [c for c, _ in ranked][:top_k]
+            safe_update_observation(
+                obs,
+                output={
+                    "top_count": len(result),
+                    "top_scores": [round(float(c.get("score", 0.0)), 4) for c in result],
+                },
+            )
+            return result
+        except Exception as e:
+            safe_update_observation(
+                obs,
+                output={"error": type(e).__name__, "message": str(e)[:200]},
+            )
+            raise
+        finally:
+            end_observation(obs)
 
 
 reranker = Reranker()

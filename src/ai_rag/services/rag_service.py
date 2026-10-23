@@ -7,6 +7,7 @@ from typing import Optional, List, Dict, Any
 
 from ai_rag.core.config import rag_config
 from ai_rag.core.vector_store import vector_store
+from ai_rag.core.observability import start_observation, end_observation, safe_update_observation
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,12 @@ async def knowledge_search_handler(
         query: 用户问题或检索关键词
         session_id: 仅用于日志追踪，不参与检索过程
     """
+    retrieval_obs = start_observation(
+        "retrieval",
+        "span",
+        input={"query": query[:200], "domain": domain},
+    )
+    use_rerank = False
     try:
         # 企业规范：知识库是全局共享资源，where=None
         # 检索模式：RAG_RETRIEVAL=hybrid(默认，BM25+向量+RRF) | vector(纯向量)
@@ -57,6 +64,11 @@ async def knowledge_search_handler(
             )
 
         if not hits:
+            safe_update_observation(
+                retrieval_obs,
+                output={"raw_hits": 0, "result": "no_hits"},
+                metadata={"mode": mode, "rerank": use_rerank, "domain": domain},
+            )
             logger.info("🔍 No raw hits returned | query='%s' | session=%s", query[:80], session_id)
             return NO_RESULT_MSG
 
@@ -76,6 +88,11 @@ async def knowledge_search_handler(
             _top_sim = float(hits[0].get("similarity", 0.0))
             # 双信号门槛：仅当重排分和向量相似度都低时才视为无相关信息（避免误杀像保密这类重排分低但向量相似度高的真问题）
             if _top_score < rag_config.RERANK_MIN_SCORE and _top_sim < rag_config.VEC_GATE_SCORE:
+                safe_update_observation(
+                    retrieval_obs,
+                    output={"raw_hits": len(hits), "result": "below_threshold", "top_score": _top_score, "top_similarity": _top_sim},
+                    metadata={"mode": mode, "rerank": use_rerank, "domain": domain},
+                )
                 logger.info("No relevant info (rerank=%.4f vec=%.3f) | query=%s", _top_score, _top_sim, query[:60])
                 return NO_RESULT_MSG
 
@@ -96,6 +113,11 @@ async def knowledge_search_handler(
 
          # 🛡️ 安全兜底：若全部低于阈值，返回空字符串触发 System Prompt 兜底回复
         if not filtered_hits:
+            safe_update_observation(
+                retrieval_obs,
+                output={"raw_hits": len(hits), "filtered_hits": 0, "result": "no_domain_hits"},
+                metadata={"mode": mode, "rerank": use_rerank, "domain": domain},
+            )
             logger.info(
                 "ℹ️ All %d hits below threshold (%.2f), returning empty context | query='%s'",
                 len(hits), rag_config.MIN_SIMILARITY, query[:80]
@@ -118,6 +140,24 @@ async def knowledge_search_handler(
 
         formatted = "\n\n".join(formatted_parts)
 
+        safe_update_observation(
+            retrieval_obs,
+            output={
+                "raw_hits": len(hits),
+                "filtered_hits": len(filtered_hits),
+                "returned_chunks": len(formatted_parts),
+                "total_chars": len(formatted),
+                "sources": [
+                    (h.get("metadata") or {}).get("source", "unknown")
+                    for h in filtered_hits[:max_chunks]
+                ],
+                "top_scores": [
+                    round(float(h.get("score", 0.0)), 4)
+                    for h in filtered_hits[:max_chunks]
+                ],
+            },
+            metadata={"mode": mode, "rerank": use_rerank, "domain": domain},
+        )
         logger.info(
             "✅ Returned %d chunks | query='%s' | session=%s | total_chars=%d",
             len(filtered_hits), query[:80], session_id, len(formatted),
@@ -125,6 +165,13 @@ async def knowledge_search_handler(
         return formatted
 
     except Exception as e:
+        safe_update_observation(
+            retrieval_obs,
+            output={"error": type(e).__name__, "message": str(e)[:300]},
+            metadata={"domain": domain},
+        )
         logger.exception("❌ knowledge_search failed | query='%s'", query[:80])
         # 企业规范：异常也返回结构化文本，不抛裸异常给 LLM
         return f"Knowledge search encountered an error: {type(e).__name__}. Please retry."
+    finally:
+        end_observation(retrieval_obs)

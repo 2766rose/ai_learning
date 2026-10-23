@@ -86,3 +86,20 @@ def safe_update_output(obs, output=None) -> None:
         obs.update(output=output)
     except Exception as e:
         logger.warning("Langfuse update 失败: %s", e)
+
+
+def safe_update_observation(obs, output=None, metadata=None, **kwargs) -> None:
+    """安全更新观测的输出、元数据和扩展字段。"""
+    if obs is None:
+        return
+    payload = dict(kwargs)
+    if output is not None:
+        payload["output"] = output
+    if metadata is not None:
+        payload["metadata"] = metadata
+    if not payload:
+        return
+    try:
+        obs.update(**payload)
+    except Exception as e:
+        logger.warning("Langfuse update 失败: %s", e)

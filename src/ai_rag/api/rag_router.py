@@ -20,7 +20,12 @@ if _agent_cfg.AGENT_BACKEND == "langgraph":
     from ai_rag.agent.runner_langgraph import agent_run  # type: ignore
 else:
     from ai_rag.agent.runner import agent_run  # type: ignore
-from ai_rag.core.observability import observe, start_observation, end_observation, safe_update_output
+from ai_rag.core.observability import (
+    observe,
+    start_observation,
+    end_observation,
+    safe_update_observation,
+)
 from ai_rag.core.semantic_cache import semantic_cache
 from ai_rag.core.rate_limiter import rate_limiter
 from ai_rag.core.embeddings import embedding_service
@@ -32,6 +37,16 @@ import ai_rag.tasks.document_tasks
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _trace_metadata(request: ChatRequest, session_id: str, **extra) -> dict:
+    """Common Langfuse metadata for chat traces."""
+    return {
+        "user_id": request.user_id or "anonymous",
+        "session_id": session_id,
+        "conversation_id": request.conversation_id or "",
+        **extra,
+    }
 
 
 def _store_tool_trace(conv_id: str, trace) -> None:
@@ -217,6 +232,12 @@ async def chat(request: ChatRequest, raw_request: Request):
     _q_emb = await _loop.run_in_executor(None, embedding_service.embed_query, user_message)
     _cached = semantic_cache.get(_q_emb)
     if _cached is not None:
+        with observe("rag-chat-cache", as_type="span", input={"question": user_message}) as cache_obs:
+            safe_update_observation(
+                cache_obs,
+                output=_cached,
+                metadata=_trace_metadata(request, session_id, cache_hit=True, stream=False),
+            )
         if request.conversation_id:
             add_message(request.conversation_id, "user", user_message)
             add_message(request.conversation_id, "assistant", _cached)
@@ -230,6 +251,7 @@ async def chat(request: ChatRequest, raw_request: Request):
             rename_conversation(request.conversation_id, user_message[:20])
 
     obs = start_observation("rag-chat", "agent", input={"question": user_message})
+    safe_update_observation(obs, metadata=_trace_metadata(request, session_id, cache_hit=False, stream=False))
     try:
         _tool_trace: list = []
         result = await agent_run(
@@ -255,7 +277,11 @@ async def chat(request: ChatRequest, raw_request: Request):
         )
         if _cacheable(ai_answer):
             semantic_cache.put(_q_emb, ai_answer)
-        safe_update_output(obs, output=ai_answer)
+        safe_update_observation(
+            obs,
+            output=ai_answer,
+            metadata=_trace_metadata(request, session_id, cache_hit=False, stream=False, answer_chars=len(ai_answer)),
+        )
         if request.conversation_id:
             add_message(request.conversation_id, "user", user_message)
             _store_tool_trace(request.conversation_id, _tool_trace)
@@ -297,8 +323,14 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
             add_message(request.conversation_id, "user", user_message)
             add_message(request.conversation_id, "assistant", _cached)
         async def _cached_stream():
-            yield f"data: {json.dumps({'type': 'chunk', 'data': _cached}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            with observe("rag-chat-cache-stream", as_type="span", input={"question": user_message}) as cache_obs:
+                yield f"data: {json.dumps({'type': 'chunk', 'data': _cached}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                safe_update_observation(
+                    cache_obs,
+                    output=_cached,
+                    metadata=_trace_metadata(request, session_id, cache_hit=True, stream=True),
+                )
         return StreamingResponse(_cached_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     _history = None
@@ -309,19 +341,20 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
             rename_conversation(request.conversation_id, user_message[:20])
 
     _tool_trace: list = []
-    generator = await agent_run(
-        session_id=session_id,
-        user_message=user_message,
-        stream=True,
-        user_id=request.user_id or "anonymous",
-        history=_history,
-        tool_trace=_tool_trace,
-    )
 
     async def sse_wrapper():
         with observe("rag-chat-stream", as_type="agent", input={"question": user_message}) as obs:
+            safe_update_observation(obs, metadata=_trace_metadata(request, session_id, cache_hit=False, stream=True))
             full_answer = ""
             try:
+                generator = await agent_run(
+                    session_id=session_id,
+                    user_message=user_message,
+                    stream=True,
+                    user_id=request.user_id or "anonymous",
+                    history=_history,
+                    tool_trace=_tool_trace,
+                )
                 # ✅ 防御性检查：确保 agent_run 返回的是异步生成器
                 if not hasattr(generator, '__aiter__'):
                     error_payload = json.dumps(
@@ -343,7 +376,11 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
 
             if _cacheable(full_answer):
                 semantic_cache.put(_q_emb, full_answer)
-            safe_update_output(obs, output=full_answer)
+            safe_update_observation(
+                obs,
+                output=full_answer,
+                metadata=_trace_metadata(request, session_id, cache_hit=False, stream=True, answer_chars=len(full_answer)),
+            )
             if request.conversation_id:
                 add_message(request.conversation_id, "user", user_message)
                 _store_tool_trace(request.conversation_id, _tool_trace)
