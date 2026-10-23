@@ -9,6 +9,7 @@ from ai_rag.agent.runner import (
     _should_disable_thinking,
     _is_realtime_tool_query,
     _ensure_weather_evidence,
+    _should_skip_knowledge_search,
 )
 
 
@@ -102,3 +103,37 @@ class TestWeatherEvidence:
         evidence = "北京当前天气：晴，气温 8°C。"
         answer = "北京当前 8°C，建议穿外套。"
         assert _ensure_weather_evidence(answer, evidence) == answer
+
+
+class TestDuplicateKnowledgeSearch:
+    def test_same_query_is_skipped(self):
+        assert _should_skip_knowledge_search(
+            {"query": "公司规定市内交通如何进行报销？", "domain": "company"},
+            True,
+            "公司规定市内交通如何进行报销？",
+            "company",
+        ) is True
+
+    def test_short_subquery_is_skipped(self):
+        assert _should_skip_knowledge_search(
+            {"query": "市内交通", "domain": "company"},
+            True,
+            "公司规定市内交通如何进行报销？",
+            "company",
+        ) is True
+
+    def test_different_domain_is_not_skipped(self):
+        assert _should_skip_knowledge_search(
+            {"query": "市内交通", "domain": "personal"},
+            True,
+            "公司规定市内交通如何进行报销？",
+            "company",
+        ) is False
+
+    def test_no_prefetch_is_not_skipped(self):
+        assert _should_skip_knowledge_search(
+            {"query": "市内交通", "domain": "company"},
+            False,
+            "公司规定市内交通如何进行报销？",
+            "company",
+        ) is False
