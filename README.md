@@ -17,7 +17,7 @@
 - 📊 **自动化评测**：50 条评估集（含 5 条陷阱题）+ RAGAS（faithfulness / answer_correctness）
 - 🔭 **可观测性**：Langfuse 全链路追踪（trace + llm_call）
 - 🌐 **Web UI**：流式对话 + 会话列表 + 文档上传 + 状态展示
-- 🧪 **测试**：46 个 pytest 用例（单元 + 接口），CI 自动执行
+- 🧪 **测试**：50 个 pytest 用例（单元 + 接口），CI 自动执行
 - 🚀 **工程化**：Docker 容器化 + GitHub Actions CI 自动构建
 
 ## 🏗️ 系统架构
@@ -100,7 +100,7 @@ flowchart LR
 | 语义缓存 | 重复问答耗时 | 10s → **0.06s** |
 | 用户限流 | 20 次/分钟 | 超限返回 429 |
 | 熔断降级 | 连续失败 3 次 | 30s 快速拒绝 |
-| 自动化测试 | pytest 单元 + 接口 | **46/46 通过** |
+| 自动化测试 | pytest 单元 + 接口 | **50/50 通过** |
 
 ## 🚀 快速开始
 
@@ -146,7 +146,7 @@ ai_learning/
 │   ├── tasks/                 # Celery 异步任务
 │   ├── parsers/               # PDF / DOCX / Excel / TXT 解析
 │   └── web/index.html         # Web UI
-├── tests/                     # 单元测试 + 接口测试（46 用例）
+├── tests/                     # 单元测试 + 接口测试（50 用例）
 ├── scripts/                   # 评估 / 建库 / 微调 / 验证脚本
 ├── docs/                      # 分周技术报告
 ├── Dockerfile

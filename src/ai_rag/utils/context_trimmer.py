@@ -1,105 +1,188 @@
 # context_trimmer.py
 import json
+import logging
+
 import tiktoken
 
-# 预加载编码器，避免每次调用都重新初始化（提升性能）
-# qwen-plus / qwen-max 等模型兼容 cl100k_base 编码
+logger = logging.getLogger(__name__)
+
+# 使用 cl100k_base 做近似估算，并额外保留消息 overhead。
 ENCODER = tiktoken.get_encoding("cl100k_base")
 
+
+def _as_message_dict(message):
+    if isinstance(message, dict):
+        return message
+    if hasattr(message, "model_dump"):
+        return message.model_dump()
+    return {}
+
+
 def _count_message_tokens(messages):
-    """
-    精确计算 messages 列表的 Token 数。
-    注：API 实际计费还会加上每条消息约 3-4 个固定 overhead token，
-    这里我们采用保守策略，每条消息额外 +4 以确保绝不超限。
-    """
-    num_tokens = 0
-    for message in messages:
-        num_tokens += 4  # 消息元数据开销
+    """近似计算消息总 Token，包含 role 和工具调用开销。"""
+    total = 0
+    for raw in messages:
+        message = _as_message_dict(raw)
+        total += 4  # 消息元数据
         for key, value in message.items():
             if isinstance(value, str):
-                num_tokens += len(ENCODER.encode(value))
+                total += len(ENCODER.encode(value))
             elif key == "tool_calls" and value:
-                # tool_calls 是对象列表，需要序列化后计算
-                num_tokens += len(ENCODER.encode(json.dumps([tc.model_dump() if hasattr(tc, 'model_dump') else tc for tc in value])))
-        num_tokens += 2  # role 字段开销
-    return num_tokens
+                normalized = [
+                    tc.model_dump() if hasattr(tc, "model_dump") else tc
+                    for tc in value
+                ]
+                total += len(ENCODER.encode(json.dumps(normalized, ensure_ascii=False)))
+        total += 2  # role 开销
+    return total
+
+
+def _tool_call_ids(message):
+    ids = set()
+    for tc in message.get("tool_calls") or []:
+        if isinstance(tc, dict):
+            call_id = tc.get("id")
+        else:
+            call_id = getattr(tc, "id", None)
+        if call_id:
+            ids.add(str(call_id))
+    return ids
+
+
+def _group_messages(messages):
+    """
+    将消息切成原子组。
+    assistant tool_calls 和它后面的 tool 结果必须一起保留。
+    孤立或不完整的 tool 消息直接丢弃，避免生成非法消息序列。
+    """
+    groups = []
+    i = 0
+    while i < len(messages):
+        message = messages[i]
+        role = message.get("role")
+        if role == "assistant" and message.get("tool_calls"):
+            call_ids = _tool_call_ids(message)
+            group = [message]
+            j = i + 1
+            while j < len(messages) and messages[j].get("role") == "tool":
+                group.append(messages[j])
+                j += 1
+            result_ids = {
+                str(m.get("tool_call_id"))
+                for m in group[1:]
+                if m.get("tool_call_id")
+            }
+            if call_ids and not call_ids.issubset(result_ids):
+                logger.warning("丢弃不完整的工具调用组: missing=%s", call_ids - result_ids)
+            else:
+                groups.append(group)
+            i = j
+            continue
+        if role == "tool":
+            logger.warning("丢弃孤立的 tool 消息: tool_call_id=%s", message.get("tool_call_id"))
+            i += 1
+            continue
+        groups.append([message])
+        i += 1
+    return groups
+
+
+def _truncate_text_to_tokens(text, max_tokens):
+    if max_tokens <= 0:
+        return ""
+    tokens = ENCODER.encode(str(text))
+    if len(tokens) <= max_tokens:
+        return str(text)
+    return ENCODER.decode(tokens[:max_tokens])
+
+
+def _fallback_latest_user(messages, remaining_budget):
+    """预算极小时，至少保留最近一条 user 消息，并截断其内容。"""
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        candidate = {"role": "user", "content": ""}
+        overhead = _count_message_tokens([candidate])
+        content_budget = max(0, remaining_budget - overhead)
+        candidate["content"] = _truncate_text_to_tokens(
+            message.get("content", ""), content_budget
+        )
+        return [candidate]
+    return []
+
 
 def trim_messages(messages, max_tokens=4000):
     """
-    Token 级智能裁剪器：确保不破坏 Function Calling 结构，且严格控制在 Token 预算内。
-    
-    :param messages: 完整的 messages 列表
-    :param max_tokens: 允许保留的最大非 System Token 数 (默认 4000)
-    :return: 裁剪后的 messages 列表
+    按总 Token 预算裁剪消息。
+
+    max_tokens 表示 System Prompt + 历史消息的近似总预算。
+    优先保留最近消息；工具调用组不可拆分；最终必须尽量不超预算。
     """
-    # 1. 提取并保护 System Prompt
+    if not messages:
+        return []
+
     system_messages = [m for m in messages if m.get("role") == "system"]
     non_system_messages = [m for m in messages if m.get("role") != "system"]
-    
-    # 计算 System Prompt 占用的 Token，剩余预算留给历史消息
     system_tokens = _count_message_tokens(system_messages)
     remaining_budget = max_tokens - system_tokens
-    
+
     if remaining_budget <= 0:
-        # 2026-08-14 修复：绝不能把对话塌缩成只剩 system，否则 Agent 会因丢失上下文反复调工具
-        recent = non_system_messages[-4:]
-        print(f"⚠️ System Prompt 已占用 {system_tokens} tokens，超出预算 {max_tokens}！保底保留最近 {len(recent)} 条历史。")
-        return system_messages + recent
+        fallback = _fallback_latest_user(non_system_messages, 0)
+        logger.warning(
+            "System Prompt 已占用 %d tokens，预算 %d，保留最近 user=%d 条",
+            system_tokens, max_tokens, len(fallback),
+        )
+        return system_messages + fallback
 
-    # 如果历史消息未超 Token 预算，直接原样返回
-    history_tokens = _count_message_tokens(non_system_messages)
-    if history_tokens <= remaining_budget:
-        return messages
+    groups = _group_messages(non_system_messages)
+    if not groups:
+        return system_messages
 
-    print(f"⚠️ 历史消息 ({history_tokens} tokens) 超出预算 ({remaining_budget} tokens)，开始 Token 级智能裁剪...")
-
-    # 2. 从后往前（由近及远）挑选，直到预算耗尽
-    kept_messages = []
-    kept_tool_call_ids = set()
-    current_used_tokens = 0
-
-    for msg in reversed(non_system_messages):
-        # 计算当前这条消息的 Token 数
-        msg_tokens = _count_message_tokens([msg])
-        
-        # 预算检查：如果加上这条就超了，立刻停止
-        if current_used_tokens + msg_tokens > remaining_budget:
-            print(f"   ✂️ Token 预算耗尽，停止添加更多历史消息。")
+    last_user_group = None
+    for idx in range(len(groups) - 1, -1, -1):
+        if any(m.get("role") == "user" for m in groups[idx]):
+            last_user_group = idx
             break
-            
-        role = msg.get("role")
-        
-        # 情况 A: Tool 返回结果
-        if role == "tool":
-            kept_messages.insert(0, msg)
-            kept_tool_call_ids.add(msg.get("tool_call_id"))
-            current_used_tokens += msg_tokens
-            continue
-            
-        # 情况 B: Assistant 发起的工具调用
-        if role == "assistant" and msg.get("tool_calls"):
-            call_ids_in_this_msg = {
-                tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
-                for tc in msg.get("tool_calls", [])
-            }
-            # 铁律：如果对应的 tool 结果不在保留列表中，这个 assistant 也不能要
-            if not call_ids_in_this_msg.issubset(kept_tool_call_ids):
-                print(f"   ✂️ 丢弃不完整的 Assistant 工具调用 (Token: {msg_tokens})")
-                continue
-                
-            kept_messages.insert(0, msg)
-            current_used_tokens += msg_tokens
-            continue
-            
-        # 情况 C: 普通 User / Assistant 文本
-        kept_messages.insert(0, msg)
-        current_used_tokens += msg_tokens
 
-    # 3. 重新组装（若全部被裁掉，保底保留最近 4 条，避免对话塌缩）
-    if not kept_messages and non_system_messages:
-        kept_messages = non_system_messages[-4:]
-    final_messages = system_messages + kept_messages
-    final_tokens = _count_message_tokens(final_messages)
-    
-    print(f"✅ Token 级裁剪完成！保留 {len(kept_messages)} 条历史，总计 {final_tokens} tokens (预算: {max_tokens})")
+    kept_groups = []
+    used = 0
+    for idx in range(len(groups) - 1, -1, -1):
+        group = groups[idx]
+        cost = _count_message_tokens(group)
+        if used + cost <= remaining_budget:
+            kept_groups.insert(0, group)
+            used += cost
+            continue
+        if idx == last_user_group:
+            fallback = _fallback_latest_user(non_system_messages, remaining_budget)
+            kept_groups = [fallback] if fallback else []
+            break
+
+    if not kept_groups:
+        fallback = _fallback_latest_user(non_system_messages, remaining_budget)
+        kept_groups = [fallback] if fallback else []
+
+    final_messages = system_messages + [m for group in kept_groups for m in group]
+
+    # 最终硬校验：优先丢弃最旧的普通消息，避免再次出现 2667 > 2048。
+    while _count_message_tokens(final_messages) > max_tokens and len(kept_groups) > 1:
+        if any(m.get("role") == "user" for m in kept_groups[0]):
+            break
+        kept_groups.pop(0)
+        final_messages = system_messages + [m for group in kept_groups for m in group]
+
+    if _count_message_tokens(final_messages) > max_tokens:
+        fallback = _fallback_latest_user(non_system_messages, remaining_budget)
+        final_messages = system_messages + fallback
+
+    if _count_message_tokens(final_messages) > max_tokens:
+        logger.warning(
+            "裁剪后仍超出预算: final=%d budget=%d（通常是 System Prompt 本身过大）",
+            _count_message_tokens(final_messages), max_tokens,
+        )
+
+    logger.info(
+        "Token 裁剪完成: kept_groups=%d final=%d budget=%d",
+        len(kept_groups), _count_message_tokens(final_messages), max_tokens,
+    )
     return final_messages
